@@ -3,6 +3,7 @@ package com.nobi.nobistream2.ui.screens
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -17,6 +18,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
@@ -38,6 +40,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.nobi.nobistream2.core.EpisodeGroup
 import com.nobi.nobistream2.core.FormatUtils
 import com.nobi.nobistream2.core.SmartFilter
 import com.nobi.nobistream2.core.VideoItem
@@ -45,7 +48,9 @@ import com.nobi.nobistream2.core.VideoQuality
 import com.nobi.nobistream2.data.db.DownloadEntity
 import com.nobi.nobistream2.ui.AppViewModel
 import com.nobi.nobistream2.ui.components.AddGroupSheet
+import com.nobi.nobistream2.ui.components.CopiesSheet
 import com.nobi.nobistream2.ui.components.EpisodeCard
+import com.nobi.nobistream2.ui.components.LoadMoreFooter
 import com.nobi.nobistream2.ui.components.NsTopBar
 import com.nobi.nobistream2.ui.components.PrimaryButton
 import com.nobi.nobistream2.ui.components.QualityChip
@@ -82,12 +87,14 @@ fun LibraryScreen(
     var showAddSheet by remember { mutableStateOf(false) }
     var showSort by remember { mutableStateOf(false) }
     var actionItem by remember { mutableStateOf<VideoItem?>(null) }
+    var copiesSheetFor by remember { mutableStateOf<EpisodeGroup?>(null) }
 
     var allVideos by remember { mutableStateOf<List<VideoItem>>(emptyList()) }
     var cursors by remember { mutableStateOf<Map<Long, Long>>(emptyMap()) }
     var hasMore by remember { mutableStateOf(false) }
     var loading by remember { mutableStateOf(true) }
     var loadingMore by remember { mutableStateOf(false) }
+    var loadMoreFailed by remember { mutableStateOf(false) }
 
     LaunchedEffect(groups) {
         if (groups.isEmpty()) {
@@ -114,23 +121,77 @@ fun LibraryScreen(
                 allVideos = allVideos + page.videos
                 cursors = page.cursors
                 hasMore = page.hasMore
+                loadMoreFailed = false
+            } else {
+                loadMoreFailed = true
             }
             loadingMore = false
         }
     }
 
-    val deduped = remember(allVideos, smartOn) {
-        if (smartOn) SmartFilter.dedup(allVideos) else allVideos
+    // v1.1.1 item 11: keep the GROUPS so a tap resolves to the group's
+    // BEST copy (highest quality) instead of the tapped copy.
+    val episodeGroups = remember(allVideos, smartOn) {
+        if (smartOn) SmartFilter.groupEpisodes(allVideos)
+        else allVideos.map { EpisodeGroup(null, it, listOf(it)) }
     }
-    val filtered = remember(deduped, filter, sortMode) {
-        var list = deduped
-        if (filter != "All") list = list.filter { it.quality.label == filter }
-        when (sortMode) {
-            "Oldest" -> list.sortedBy { it.dateEpochSec }
-            "TitleAz" -> list.sortedBy { it.title.lowercase() }
-            "Largest" -> list.sortedByDescending { it.sizeBytes }
-            "HighestQuality" -> list.sortedByDescending { it.quality.rank }
-            else -> list.sortedByDescending { it.dateEpochSec }
+    val deduped = remember(episodeGroups) { episodeGroups.map { it.best.copy(hiddenCopies = it.hiddenCount) } }
+    // v1.1.1 item 11 (NobiStream 1 v2.6.1): non-episode posts go in
+    // their own "Other videos" section instead of the episode list.
+    val otherVideos = remember(deduped, smartOn) {
+        if (smartOn) deduped.filter { SmartFilter.isNonEpisode(it) } else emptyList()
+    }
+    val episodeVideos = remember(deduped, otherVideos) { deduped - otherVideos.toSet() }
+    fun applyListFilters(list: List<VideoItem>): List<VideoItem> {
+        var out = list
+        if (filter != "All") out = out.filter { it.quality.label == filter }
+        return when (sortMode) {
+            "Oldest" -> out.sortedBy { it.dateEpochSec }
+            "TitleAz" -> out.sortedBy { it.title.lowercase() }
+            "Largest" -> out.sortedByDescending { it.sizeBytes }
+            "HighestQuality" -> out.sortedByDescending { it.quality.rank }
+            else -> out.sortedByDescending { it.dateEpochSec }
+        }
+    }
+    val filtered = remember(episodeVideos, filter, sortMode) {
+        applyListFilters(episodeVideos)
+    }
+    val otherFiltered = remember(otherVideos, filter, sortMode) {
+        applyListFilters(otherVideos)
+    }
+    fun groupFor(item: VideoItem): EpisodeGroup? =
+        episodeGroups.firstOrNull { g ->
+            g.copies.any { it.messageId == item.messageId && it.chatId == item.chatId }
+        }
+    // v1.1.1 item 11: tap = the best copy VISIBLE in the current list
+    // (the group's best, unless the quality filter hides it — then the
+    // best visible copy). The playlist stays the current filtered list.
+    fun playBest(item: VideoItem) {
+        val group = groupFor(item)
+        val inOther = otherFiltered.any { it.messageId == item.messageId }
+        val visibleList = if (inOther) otherFiltered else filtered
+        val best = group?.copies?.firstOrNull { c ->
+            visibleList.any { it.messageId == c.messageId }
+        } ?: item
+        onPlayVideo(best, visibleList, item.chatId)
+    }
+    // v1.1.1 item 11: play a copy the user picked explicitly (copies
+    // sheet). A non-best copy is not in the deduped list, so it is
+    // swapped in for its group's best — the playlist order is kept.
+    fun playCopy(copy: VideoItem) {
+        val idx = filtered.indexOfFirst { it.messageId == copy.messageId }
+        if (idx >= 0) {
+            onPlayVideo(copy, filtered, copy.chatId)
+            return
+        }
+        val group = groupFor(copy)
+        val bestIdx = group?.let { g -> filtered.indexOfFirst { it.messageId == g.best.messageId } } ?: -1
+        if (bestIdx >= 0) {
+            val list = filtered.toMutableList()
+            list[bestIdx] = copy
+            onPlayVideo(copy, list, copy.chatId)
+        } else {
+            onPlayVideo(copy, listOf(copy), copy.chatId)
         }
     }
     val groupById = remember(groups) { groups.associateBy { it.chatId } }
@@ -180,8 +241,11 @@ fun LibraryScreen(
         }
 
         // Sections: Episodes / Watch Later / Downloads (inside Library, per spec §9).
+        // v1.1.1: the row scrolls so chips never squeeze or wrap.
         Row(
-            modifier = Modifier.fillMaxWidth().padding(bottom = 20.dp),
+            modifier = Modifier.fillMaxWidth()
+                .horizontalScroll(rememberScrollState())
+                .padding(bottom = 20.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             listOf("Episodes", "Watch Later", "Downloads").forEach { label ->
@@ -195,7 +259,9 @@ fun LibraryScreen(
             else -> {
                 // Quality chips.
                 Row(
-                    modifier = Modifier.fillMaxWidth().padding(bottom = 20.dp),
+                    modifier = Modifier.fillMaxWidth()
+                        .horizontalScroll(rememberScrollState())
+                        .padding(bottom = 20.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     listOf("All", "480p", "720p", "1080p", "4K").forEach { label ->
@@ -206,7 +272,7 @@ fun LibraryScreen(
                     loading -> {
                         Column { repeat(3) { SkeletonRow() } }
                     }
-                    filtered.isEmpty() -> {
+                    filtered.isEmpty() && otherFiltered.isEmpty() -> {
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -251,23 +317,41 @@ fun LibraryScreen(
                                     repo = vm.repository,
                                     item = video,
                                     group = groupById[video.chatId],
-                                    onClick = { onPlayVideo(video, filtered, video.chatId) },
-                                    onLongClick = { actionItem = video }
+                                    onClick = { playBest(video) },
+                                    onLongClick = { actionItem = video },
+                                    onCopiesClick = if (video.hiddenCopies > 0) {
+                                        { copiesSheetFor = groupFor(video) }
+                                    } else null
                                 )
+                            }
+                            if (otherFiltered.isNotEmpty()) {
+                                item {
+                                    Text(
+                                        "Other videos (${otherFiltered.size})",
+                                        fontFamily = ManropeFamily,
+                                        fontWeight = FontWeight.ExtraBold,
+                                        fontSize = 16.sp,
+                                        color = NsColors.TextPrimary,
+                                        modifier = Modifier.padding(top = 4.dp, bottom = 12.dp)
+                                    )
+                                }
+                                items(otherFiltered, key = { it.chatId to it.messageId }) { video ->
+                                    EpisodeCard(
+                                        repo = vm.repository,
+                                        item = video,
+                                        group = groupById[video.chatId],
+                                        onClick = { playBest(video) },
+                                        onLongClick = { actionItem = video }
+                                    )
+                                }
                             }
                             if (hasMore) {
                                 item {
-                                    LaunchedEffect(Unit) { loadMore() }
-                                    if (loadingMore) {
-                                        Text(
-                                            "Loading more videos…",
-                                            fontFamily = ManropeFamily,
-                                            fontWeight = FontWeight.Medium,
-                                            fontSize = 14.sp,
-                                            color = NsColors.TextSecondary,
-                                            modifier = Modifier.padding(vertical = 16.dp)
-                                        )
-                                    }
+                                    LoadMoreFooter(
+                                        loadingMore = loadingMore,
+                                        failed = loadMoreFailed,
+                                        onLoadMore = { loadMore() }
+                                    )
                                 }
                             }
                         }
@@ -296,16 +380,26 @@ fun LibraryScreen(
         VideoActionSheet(
             vm = vm,
             item = item,
-            onPlay = { onPlayVideo(item, filtered, item.chatId); actionItem = null },
+            onPlay = { playBest(item); actionItem = null },
             onPlayFromStart = {
                 kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Main).launch {
                     vm.repository.savePosition(item, 0L)
-                    onPlayVideo(item, filtered, item.chatId)
+                    playBest(item)
                     actionItem = null
                 }
             },
+            onChooseCopy = if (item.hiddenCopies > 0) {
+                { copiesSheetFor = groupFor(item); actionItem = null }
+            } else null,
             onDismiss = { actionItem = null },
             onWatchLaterToggled = {}
+        )
+    }
+    copiesSheetFor?.let { group ->
+        CopiesSheet(
+            copies = group.copies,
+            onPick = { copy -> copiesSheetFor = null; playCopy(copy) },
+            onDismiss = { copiesSheetFor = null }
         )
     }
 }
@@ -384,7 +478,9 @@ private fun DownloadsSection(
     }
     Column(modifier = Modifier.fillMaxSize()) {
         Row(
-            modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+            modifier = Modifier.fillMaxWidth()
+                .horizontalScroll(rememberScrollState())
+                .padding(bottom = 8.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             listOf("All", "Downloading", "Completed", "Failed").forEach { label ->

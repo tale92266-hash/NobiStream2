@@ -52,7 +52,7 @@ object SmartFilter {
     private val seasonRegex =
         Regex("""(?i)(?:\bS(\d{1,2})\b|\bSeason\s+(\d{1,2})\b)""")
     private val episodeRegex =
-        Regex("""(?i)(?:\b(?:Ep\.?|Episode|E)\s*(\d{1,4})\b|S\d{1,2}E(\d{1,4})\b)""")
+        Regex("""(?i)(?:\b(?:Ep\.?|Episode|E)\s*[-:#]?\s*(\d{1,4})\b|S\d{1,2}E(\d{1,4})\b)""")
     private val compactSeasonEpisodeRegex =
         Regex("""(?i)\bS(\d{1,2})E(\d{1,4})\b""")
     private val partRegex = Regex("""(?i)\bPart\s*(\d{1,2})\b""")
@@ -87,6 +87,69 @@ object SmartFilter {
             }
         val part = partRegex.find(text)?.groupValues?.getOrNull(1)?.toIntOrNull()
         return EpisodeKey(item.chatId, season, episode, part)
+    }
+
+    /**
+     * v1.1.1 (ported from NobiStream 1 v2.6.1): posts that carry a video
+     * but are NOT an episode — e.g. "BIG NEWS FOR NARUTO FANS!" — go in
+     * their own "Other videos" section instead of polluting the episode
+     * list. A post is non-episode when it has no episode key AND no
+     * episode-shaped marker at all. Conservative: anything shaped like
+     * an episode (season/episode/part/quality marker) stays an episode.
+     */
+    private val nonEpisodeRegex =
+        Regex("""(?i)(season\s*\d+|s\d{1,2}e\d{1,4}|ep\.?|episode|part\s*\d|1080p|720p|480p|360p|4k)""")
+
+    fun isNonEpisode(item: VideoItem): Boolean {
+        if (parseKey(item) != null) return false
+        val text = "${item.title} ${item.caption}".trim()
+        if (text.isEmpty()) return false
+        return !nonEpisodeRegex.containsMatchIn(text)
+    }
+
+    /**
+     * v1.1.1 (ported from NobiStream 1 v2.6.1): one episode watched in
+     * two qualities must not appear twice in Continue Watching. Keep
+     * the best copy per episode key; standalones pass through as-is.
+     */
+    fun dedupContinue(items: List<VideoItem>): List<VideoItem> {
+        val seen = HashSet<EpisodeKey>()
+        val out = ArrayList<VideoItem>(items.size)
+        for (item in items) {
+            val key = parseKey(item)
+            if (key == null) {
+                out.add(item)
+            } else if (seen.add(key)) {
+                out.add(item)
+            }
+        }
+        return out
+    }
+
+    /** Regression guard: the same episode key must never produce two groups. */
+    fun hasDuplicateEpisodeKeys(groups: List<EpisodeGroup>): Boolean {
+        val seen = HashSet<EpisodeKey>()
+        for (group in groups) {
+            val key = group.key ?: continue
+            if (!seen.add(key)) return true
+        }
+        return false
+    }
+
+    /**
+     * v1.1.1: tap-time best-copy resolution. The tapped item may be any
+     * copy (e.g. the 360p card in the grid); the player must open the
+     * group's BEST copy (highest quality rank, then largest file, then
+     * newest) with the deduped list as the playlist. Falls back to the
+     * tapped item itself when it has no group.
+     */
+    fun bestCopyFor(item: VideoItem, groups: List<EpisodeGroup>): VideoItem {
+        for (group in groups) {
+            if (group.copies.any { it.messageId == item.messageId && it.chatId == item.chatId }) {
+                return group.best
+            }
+        }
+        return item
     }
 
     /**

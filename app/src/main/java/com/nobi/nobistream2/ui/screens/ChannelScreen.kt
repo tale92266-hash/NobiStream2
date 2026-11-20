@@ -1,7 +1,9 @@
 package com.nobi.nobistream2.ui.screens
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -16,13 +18,17 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.BookmarkAdd
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.BookmarkRemove
+import androidx.compose.material.icons.filled.CopyAll
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Info
@@ -52,16 +58,21 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
+import com.nobi.nobistream2.core.EpisodeGroup
 import com.nobi.nobistream2.core.FormatUtils
 import com.nobi.nobistream2.core.SmartFilter
 import com.nobi.nobistream2.core.VideoItem
 import com.nobi.nobistream2.core.VideoQuality
 import com.nobi.nobistream2.ui.AppViewModel
 import com.nobi.nobistream2.ui.components.AppTopBar
+import com.nobi.nobistream2.ui.components.CopiesSheet
 import com.nobi.nobistream2.ui.components.EmptyState
 import com.nobi.nobistream2.ui.components.ErrorState
+import com.nobi.nobistream2.ui.components.LoadMoreFooter
 import com.nobi.nobistream2.ui.components.QualityChip
+import com.nobi.nobistream2.ui.components.SkeletonGridCard
 import com.nobi.nobistream2.ui.components.SkeletonRow
 import com.nobi.nobistream2.ui.components.VideoCard
 import kotlinx.coroutines.launch
@@ -96,6 +107,7 @@ fun ChannelScreen(
     var hasMore by remember { mutableStateOf(true) }
     var loading by remember { mutableStateOf(true) }
     var loadingMore by remember { mutableStateOf(false) }
+    var loadMoreFailed by remember { mutableStateOf(false) }
     var loadError by remember { mutableStateOf(false) }
     var filter by remember { mutableStateOf("All") }
     var query by remember { mutableStateOf("") }
@@ -104,6 +116,7 @@ fun ChannelScreen(
     var showOnlyWatched by remember { mutableStateOf(false) }
     var showOnlyWatchLater by remember { mutableStateOf(false) }
     var actionItem by remember { mutableStateOf<VideoItem?>(null) }
+    var copiesSheetFor by remember { mutableStateOf<EpisodeGroup?>(null) }
     var watchLaterIds by remember { mutableStateOf<Set<Pair<Long, Long>>>(emptySet()) }
 
     // First page, cached in state so the count is correct from frame one.
@@ -135,29 +148,87 @@ fun ChannelScreen(
                 allVideos = allVideos + page.videos
                 lastMessageId = page.lastMessageId
                 hasMore = page.rawCount >= 50 && page.lastMessageId > 0L
+                loadMoreFailed = false
+            } else {
+                loadMoreFailed = true
             }
             loadingMore = false
         }
     }
 
     // Dedup first, then quality filter — same order as the old app.
-    val deduped = remember(allVideos, smartOn) {
-        if (smartOn) SmartFilter.dedup(allVideos) else allVideos
+    // v1.1.1 item 11: keep the GROUPS so a tap resolves to the group's
+    // BEST copy (highest quality) instead of the tapped copy.
+    val groups = remember(allVideos, smartOn) {
+        if (smartOn) SmartFilter.groupEpisodes(allVideos)
+        else allVideos.map { EpisodeGroup(null, it, listOf(it)) }
     }
-    val filtered = remember(deduped, filter, query, showOnlyWatched, showOnlyWatchLater, watchLaterIds) {
-        var list = deduped
-        if (filter != "All") list = list.filter { it.quality.label == filter }
-        if (showOnlyWatched) list = list.filter { it.watched }
-        if (showOnlyWatchLater) list = list.filter { watchLaterIds.contains(it.chatId to it.messageId) }
+    val deduped = remember(groups) { groups.map { it.best.copy(hiddenCopies = it.hiddenCount) } }
+    // v1.1.1 item 11 (NobiStream 1 v2.6.1): non-episode posts go in
+    // their own "Other videos" section instead of the episode list.
+    val otherVideos = remember(deduped, smartOn) {
+        if (smartOn) deduped.filter { SmartFilter.isNonEpisode(it) } else emptyList()
+    }
+    val episodeVideos = remember(deduped, otherVideos) { deduped - otherVideos.toSet() }
+    fun applyListFilters(list: List<VideoItem>): List<VideoItem> {
+        var out = list
+        if (filter != "All") out = out.filter { it.quality.label == filter }
+        if (showOnlyWatched) out = out.filter { it.watched }
+        if (showOnlyWatchLater) out = out.filter { watchLaterIds.contains(it.chatId to it.messageId) }
         if (query.isNotBlank()) {
-            list = list.filter { it.title.contains(query, ignoreCase = true) || it.caption.contains(query, ignoreCase = true) }
+            out = out.filter { it.title.contains(query, ignoreCase = true) || it.caption.contains(query, ignoreCase = true) }
         }
-        when (sortMode) {
-            "Oldest" -> list.sortedBy { it.dateEpochSec }
-            "TitleAz" -> list.sortedBy { it.title.lowercase() }
-            "Largest" -> list.sortedByDescending { it.sizeBytes }
-            "HighestQuality" -> list.sortedByDescending { it.quality.rank }
-            else -> list.sortedByDescending { it.dateEpochSec }
+        return when (sortMode) {
+            "Oldest" -> out.sortedBy { it.dateEpochSec }
+            "TitleAz" -> out.sortedBy { it.title.lowercase() }
+            "Largest" -> out.sortedByDescending { it.sizeBytes }
+            "HighestQuality" -> out.sortedByDescending { it.quality.rank }
+            else -> out.sortedByDescending { it.dateEpochSec }
+        }
+    }
+    val filtered = remember(episodeVideos, filter, query, showOnlyWatched, showOnlyWatchLater, watchLaterIds, sortMode) {
+        applyListFilters(episodeVideos)
+    }
+    val otherFiltered = remember(otherVideos, filter, query, showOnlyWatched, showOnlyWatchLater, watchLaterIds, sortMode) {
+        applyListFilters(otherVideos)
+    }
+    // v1.1.1 item 11: tap = the best copy VISIBLE in the current list
+    // (the group's best, unless the quality filter hides it — then the
+    // best visible copy). The playlist stays the current filtered list.
+    fun playBest(item: VideoItem) {
+        val group = groups.firstOrNull { g ->
+            g.copies.any { it.messageId == item.messageId && it.chatId == item.chatId }
+        }
+        val inOther = otherFiltered.any { it.messageId == item.messageId }
+        val visibleList = if (inOther) otherFiltered else filtered
+        val best = group?.copies?.firstOrNull { c ->
+            visibleList.any { it.messageId == c.messageId }
+        } ?: item
+        onPlayVideo(best, visibleList, chatId)
+    }
+    fun groupFor(item: VideoItem): EpisodeGroup? =
+        groups.firstOrNull { g ->
+            g.copies.any { it.messageId == item.messageId && it.chatId == item.chatId }
+        }
+    // v1.1.1 item 11: play a copy the user picked explicitly (copies
+    // sheet). A non-best copy is not in the deduped list, so it is
+    // swapped in for its group's best — the playlist order is kept.
+    fun playCopy(copy: VideoItem) {
+        val idx = filtered.indexOfFirst { it.messageId == copy.messageId }
+        if (idx >= 0) {
+            onPlayVideo(copy, filtered, chatId)
+            return
+        }
+        val group = groups.firstOrNull { g ->
+            g.copies.any { it.messageId == copy.messageId && it.chatId == copy.chatId }
+        }
+        val bestIdx = group?.let { g -> filtered.indexOfFirst { it.messageId == g.best.messageId } } ?: -1
+        if (bestIdx >= 0) {
+            val list = filtered.toMutableList()
+            list[bestIdx] = copy
+            onPlayVideo(copy, list, chatId)
+        } else {
+            onPlayVideo(copy, listOf(copy), chatId)
         }
     }
 
@@ -167,13 +238,13 @@ fun ChannelScreen(
             subtitle = "Episodes (${filtered.size})" + if (totalCount > 0) " · $totalCount on Telegram" else "",
             onBack = onBack,
             actions = {
-                IconButton(onClick = onOpenSearch, modifier = Modifier.size(48.dp)) {
+                IconButton(onClick = onOpenSearch, modifier = Modifier.size(40.dp)) {
                     Icon(Icons.Filled.Search, contentDescription = "Search", tint = NsColors.TextPrimary)
                 }
-                IconButton(onClick = { showSort = true }, modifier = Modifier.size(48.dp)) {
+                IconButton(onClick = { showSort = true }, modifier = Modifier.size(40.dp)) {
                     Icon(Icons.Filled.Sort, contentDescription = "Sort", tint = NsColors.TextPrimary)
                 }
-                IconButton(onClick = { showFilter = true }, modifier = Modifier.size(48.dp)) {
+                IconButton(onClick = { showFilter = true }, modifier = Modifier.size(40.dp)) {
                     Icon(Icons.Filled.Tune, contentDescription = "Filter", tint = NsColors.TextPrimary)
                 }
                 IconButton(
@@ -182,7 +253,7 @@ fun ChannelScreen(
                             vm.repository.settingsStore.setViewMode(if (viewMode == "List") "Grid" else "List")
                         }
                     },
-                    modifier = Modifier.size(48.dp)
+                    modifier = Modifier.size(40.dp)
                 ) {
                     Icon(
                         if (viewMode == "List") Icons.Filled.GridView else Icons.Filled.ViewList,
@@ -200,8 +271,12 @@ fun ChannelScreen(
             modifier = Modifier.fillMaxWidth().padding(horizontal = NsDimens.ContentPadding).height(NsDimens.InputHeight)
         )
         Spacer(Modifier.height(8.dp))
+        // v1.1.1 item 8: the 5 chips overflow a narrow screen — the row
+        // scrolls horizontally now (and QualityChip itself never wraps).
         Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = NsDimens.ContentPadding),
+            modifier = Modifier.fillMaxWidth()
+                .horizontalScroll(rememberScrollState())
+                .padding(horizontal = NsDimens.ContentPadding),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             listOf("All", "480p", "720p", "1080p", "4K").forEach { label ->
@@ -212,8 +287,22 @@ fun ChannelScreen(
 
         when {
             loading -> {
-                Column(modifier = Modifier.padding(horizontal = NsDimens.ContentPadding)) {
-                    repeat(4) { SkeletonRow() }
+                // v1.1.1 item 7: first-page skeleton matches the mode —
+                // grid skeletons in grid mode, list skeletons in list mode.
+                if (viewMode == "Grid") {
+                    LazyVerticalGrid(
+                        columns = GridCells.Fixed(2),
+                        contentPadding = PaddingValues(horizontal = NsDimens.ContentPadding, vertical = 8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(14.dp),
+                        verticalArrangement = Arrangement.spacedBy(14.dp),
+                        modifier = Modifier.fillMaxSize()
+                    ) {
+                        items(6) { SkeletonGridCard() }
+                    }
+                } else {
+                    Column(modifier = Modifier.padding(horizontal = NsDimens.ContentPadding)) {
+                        repeat(4) { SkeletonRow() }
+                    }
                 }
             }
             loadError -> {
@@ -234,7 +323,7 @@ fun ChannelScreen(
                     }
                 )
             }
-            filtered.isEmpty() -> {
+            filtered.isEmpty() && otherFiltered.isEmpty() -> {
                 EmptyState(
                     icon = Icons.Filled.Search,
                     title = "No videos found",
@@ -245,18 +334,45 @@ fun ChannelScreen(
                 LazyVerticalGrid(
                     columns = GridCells.Fixed(2),
                     contentPadding = PaddingValues(horizontal = NsDimens.ContentPadding, vertical = 8.dp),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(14.dp),
+                    verticalArrangement = Arrangement.spacedBy(14.dp),
                     modifier = Modifier.fillMaxSize()
                 ) {
                     items(filtered, key = { it.chatId to it.messageId }) { video ->
-                        Column(
-                            modifier = Modifier.clickable { onPlayVideo(video, filtered, chatId) }
-                        ) {
-                            VideoThumb(vm.repository, video, modifier = Modifier.fillMaxWidth().aspectRatio(16f / 9f))
-                            Spacer(Modifier.height(4.dp))
-                            Text(video.title, style = MaterialTheme.typography.titleSmall, color = NsColors.TextPrimary, maxLines = 2)
-                            Text("${video.quality.label} · ${FormatUtils.formatDuration(video.durationSec)}", style = MaterialTheme.typography.bodySmall, color = NsColors.TextSecondary)
+                        ChannelGridCard(
+                            repo = vm.repository,
+                            video = video,
+                            onPlay = { playBest(video) },
+                            onCopiesClick = if (video.hiddenCopies > 0) {
+                                { copiesSheetFor = groupFor(video) }
+                            } else null
+                        )
+                    }
+                    if (otherFiltered.isNotEmpty()) {
+                        item(span = { GridItemSpan(2) }) {
+                            Text(
+                                "Other videos (${otherFiltered.size})",
+                                style = MaterialTheme.typography.titleMedium,
+                                color = NsColors.TextPrimary,
+                                modifier = Modifier.padding(top = 12.dp)
+                            )
+                        }
+                        items(otherFiltered, key = { it.chatId to it.messageId }) { video ->
+                            ChannelGridCard(
+                                repo = vm.repository,
+                                video = video,
+                                onPlay = { playBest(video) },
+                                onCopiesClick = null
+                            )
+                        }
+                    }
+                    if (hasMore) {
+                        item(span = { GridItemSpan(2) }) {
+                            LoadMoreFooter(
+                                loadingMore = loadingMore,
+                                failed = loadMoreFailed,
+                                onLoadMore = { loadMore() }
+                            )
                         }
                     }
                 }
@@ -270,16 +386,35 @@ fun ChannelScreen(
                         VideoCard(
                             repo = vm.repository,
                             item = video,
-                            onClick = { onPlayVideo(video, filtered, chatId) },
+                            onClick = { playBest(video) },
                             onLongClick = { actionItem = video }
                         )
                     }
+                    if (otherFiltered.isNotEmpty()) {
+                        item {
+                            Text(
+                                "Other videos (${otherFiltered.size})",
+                                style = MaterialTheme.typography.titleMedium,
+                                color = NsColors.TextPrimary,
+                                modifier = Modifier.padding(top = 16.dp, bottom = 4.dp)
+                            )
+                        }
+                        items(otherFiltered, key = { it.chatId to it.messageId }) { video ->
+                            VideoCard(
+                                repo = vm.repository,
+                                item = video,
+                                onClick = { playBest(video) },
+                                onLongClick = { actionItem = video }
+                            )
+                        }
+                    }
                     if (hasMore) {
                         item {
-                            LaunchedEffect(Unit) { loadMore() }
-                            if (loadingMore) {
-                                Text("Loading more videos…", style = MaterialTheme.typography.bodyMedium, color = NsColors.TextSecondary, modifier = Modifier.padding(vertical = 16.dp))
-                            }
+                            LoadMoreFooter(
+                                loadingMore = loadingMore,
+                                failed = loadMoreFailed,
+                                onLoadMore = { loadMore() }
+                            )
                         }
                     }
                 }
@@ -313,17 +448,27 @@ fun ChannelScreen(
         VideoActionSheet(
             vm = vm,
             item = item,
-            onPlay = { onPlayVideo(item, filtered, chatId); actionItem = null },
+            onPlay = { playBest(item); actionItem = null },
             onPlayFromStart = {
                 // Play from start: clear the saved position first, then play.
                 kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Main).launch {
                     vm.repository.savePosition(item, 0L)
-                    onPlayVideo(item, filtered, chatId)
+                    playBest(item)
                     actionItem = null
                 }
             },
+            onChooseCopy = if (item.hiddenCopies > 0) {
+                { copiesSheetFor = groupFor(item); actionItem = null }
+            } else null,
             onDismiss = { actionItem = null },
             onWatchLaterToggled = { watchLaterIds = watchLaterIds.toMutableSet().also { /* refreshed on next open */ } }
+        )
+    }
+    copiesSheetFor?.let { group ->
+        CopiesSheet(
+            copies = group.copies,
+            onPick = { copy -> copiesSheetFor = null; playCopy(copy) },
+            onDismiss = { copiesSheetFor = null }
         )
     }
 }
@@ -395,7 +540,8 @@ fun VideoActionSheet(
     onPlay: () -> Unit,
     onPlayFromStart: () -> Unit,
     onDismiss: () -> Unit,
-    onWatchLaterToggled: () -> Unit
+    onWatchLaterToggled: () -> Unit,
+    onChooseCopy: (() -> Unit)? = null
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
     var isSaved by remember { mutableStateOf(false) }
@@ -411,6 +557,11 @@ fun VideoActionSheet(
             Spacer(Modifier.height(16.dp))
             ActionRow(Icons.Filled.PlayArrow, "Play") { onPlay() }
             ActionRow(Icons.Filled.PlayArrow, "Play from Start") { onPlayFromStart() }
+            // v1.1.1 item 11: pick a specific copy (the card tap plays
+            // the best copy by default; this is the manual override).
+            if (item.hiddenCopies > 0 && onChooseCopy != null) {
+                ActionRow(Icons.Filled.CopyAll, "Choose copy (${item.hiddenCopies + 1})") { onChooseCopy() }
+            }
             ActionRow(
                 if (isSaved) Icons.Filled.BookmarkRemove else Icons.Filled.BookmarkAdd,
                 if (isSaved) "Remove from Watch Later" else "Add to Watch Later"
@@ -455,3 +606,47 @@ private fun ActionRow(icon: androidx.compose.ui.graphics.vector.ImageVector, lab
         }
     }
 }
+
+/**
+ * v1.1.1 items 8/11: grid card — 16/9 thumb + copies badge (tap the
+ * badge to pick a copy) + title + quality · duration meta. Grid gaps
+ * are 14dp (HTML rail gap).
+ */
+@Composable
+private fun ChannelGridCard(
+    repo: NobiRepository,
+    video: VideoItem,
+    onPlay: () -> Unit,
+    onCopiesClick: (() -> Unit)?
+) {
+    Column(modifier = Modifier.clickable(onClick = onPlay)) {
+        Box(modifier = Modifier.fillMaxWidth()) {
+            VideoThumb(repo, video, modifier = Modifier.fillMaxWidth().aspectRatio(16f / 9f))
+            if (video.hiddenCopies > 0) {
+                Box(
+                    modifier = Modifier.align(Alignment.TopEnd)
+                        .padding(6.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(NsColors.BadgeBg)
+                        .then(if (onCopiesClick != null) Modifier.clickable(onClick = onCopiesClick) else Modifier)
+                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                ) {
+                    Text(
+                        "${video.hiddenCopies + 1} copies",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Color.White
+                    )
+                }
+            }
+        }
+        Spacer(Modifier.height(4.dp))
+        Text(video.title, style = MaterialTheme.typography.titleSmall, color = NsColors.TextPrimary, maxLines = 2)
+        Text(
+            "${video.quality.label} · ${FormatUtils.formatDuration(video.durationSec)}",
+            style = MaterialTheme.typography.bodySmall,
+            color = NsColors.TextSecondary
+        )
+    }
+}
+
+// v1.1.1 item 7: LoadMoreFooter lives in ui.components (shared with LibraryScreen).

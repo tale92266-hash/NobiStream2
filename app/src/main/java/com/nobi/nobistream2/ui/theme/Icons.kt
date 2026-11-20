@@ -189,4 +189,27 @@ object NsIcons {
         "M6 6h12a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2z",
         "M7 15h10"
     )
+
+    /**
+     * v1.1.1: speaker for the 15-step volume overlay (item 2). Same
+     * stroke style as the other HTML icons (24 viewport, width 2,
+     * round caps/joins). No volume icon exists in the HTML design;
+     * this is drawn to match its icon language.
+     */
+    val Volume: ImageVector = strokeIcon(
+        "NsVolume", 2f,
+        "M4 10v4h3l4 3.5v-11L7 10H4z",
+        "M15 9.5a4 4 0 0 1 0 5",
+        "M17.5 7a8 8 0 0 1 0 10"
+    )
+
+    /**
+     * v1.1.1: sun for the 15-step brightness overlay (item 2). Same
+     * stroke style as the other HTML icons.
+     */
+    val Brightness: ImageVector = strokeIcon(
+        "NsBrightness", 2f,
+        "M12 17a5 5 0 1 0 0-10 5 5 0 0 0 0 10z",
+        "M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"
+    )
 }

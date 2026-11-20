@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -188,15 +189,18 @@ fun AppTopBar(
     onBack: (() -> Unit)? = null,
     actions: @Composable () -> Unit = {}
 ) {
+    // v1.1.1 item 8: the title gets TWO lines and the bar grows with it
+    // (a 1-line title + four 48dp actions truncated channel names
+    // mid-word). Actions stay 40dp (the HTML's icon-btn size).
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .height(NsDimens.TopBarHeight)
-            .padding(horizontal = NsDimens.ContentPadding),
+            .padding(horizontal = NsDimens.ContentPadding, vertical = 8.dp)
+            .heightIn(min = 48.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         if (onBack != null) {
-            IconButton(onClick = onBack, modifier = Modifier.size(48.dp)) {
+            IconButton(onClick = onBack, modifier = Modifier.size(40.dp)) {
                 Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = NsColors.TextPrimary)
             }
         }
@@ -205,7 +209,7 @@ fun AppTopBar(
                 title,
                 style = MaterialTheme.typography.titleLarge,
                 color = NsColors.TextPrimary,
-                maxLines = 1,
+                maxLines = 2,
                 overflow = TextOverflow.Ellipsis
             )
             if (subtitle != null) {
@@ -378,6 +382,7 @@ fun EpisodeCard(
     group: GroupItem?,
     onClick: () -> Unit,
     onLongClick: () -> Unit = {},
+    onCopiesClick: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     Column(
@@ -389,12 +394,15 @@ fun EpisodeCard(
         Box(modifier = Modifier.fillMaxWidth().aspectRatio(16f / 9f)) {
             VideoThumb(repo, item, modifier = Modifier.fillMaxSize())
             if (item.hiddenCopies > 0) {
+                // v1.1.1 item 11: the copies badge is a real button —
+                // tap it to pick any copy (best is the default tap).
                 Box(
                     modifier = Modifier
                         .align(Alignment.TopEnd)
                         .padding(10.dp)
                         .clip(RoundedCornerShape(8.dp))
                         .background(NsColors.BadgeBg)
+                        .then(if (onCopiesClick != null) Modifier.clickable(onClick = onCopiesClick) else Modifier)
                         .padding(horizontal = 9.dp, vertical = 5.dp)
                 ) {
                     Text(
@@ -447,6 +455,70 @@ fun EpisodeCard(
                     overflow = TextOverflow.Ellipsis
                 )
             }
+        }
+    }
+}
+
+/**
+ * v1.1.1 item 11: the copies picker. In v1.1.0 the copies badge was
+ * display-only and no sheet existed at all, so a user could never pick
+ * a specific copy — this sheet is the "pick any copy directly" path.
+ * Copies are best-first; the first row carries the "Best" tag. The
+ * caller plays the picked copy as-is (no best-copy redirection).
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun CopiesSheet(
+    copies: List<VideoItem>,
+    onPick: (VideoItem) -> Unit,
+    onDismiss: () -> Unit
+) {
+    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState()) {
+        Column(modifier = Modifier.fillMaxWidth().padding(20.dp)) {
+            Text("Choose a copy", style = MaterialTheme.typography.titleLarge, color = NsColors.TextPrimary)
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "${copies.size} copies — best first",
+                style = MaterialTheme.typography.bodySmall,
+                color = NsColors.TextSecondary
+            )
+            Spacer(Modifier.height(12.dp))
+            copies.forEachIndexed { index, copy ->
+                Row(
+                    modifier = Modifier.fillMaxWidth().height(52.dp).clickable { onPick(copy) },
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            copy.quality.label,
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = NsColors.TextPrimary
+                        )
+                        Text(
+                            "${FormatUtils.formatSize(copy.sizeBytes)} · ${FormatUtils.formatDate(copy.dateEpochSec)}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = NsColors.TextSecondary
+                        )
+                    }
+                    if (index == 0) {
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(999.dp))
+                                .background(NsColors.Primary.copy(alpha = 0.14f))
+                                .padding(horizontal = 10.dp, vertical = 5.dp)
+                        ) {
+                            Text(
+                                "Best",
+                                fontFamily = ManropeFamily,
+                                fontWeight = FontWeight.ExtraBold,
+                                fontSize = 12.sp,
+                                color = NsColors.AccentBright
+                            )
+                        }
+                    }
+                }
+            }
+            Spacer(Modifier.height(16.dp))
         }
     }
 }
@@ -619,7 +691,9 @@ fun QualityChip(
             fontFamily = ManropeFamily,
             fontWeight = FontWeight.ExtraBold,
             fontSize = 13.5.sp,
-            color = if (selected) Color.White else NsColors.TextSecondary
+            color = if (selected) Color.White else NsColors.TextSecondary,
+            maxLines = 1,
+            softWrap = false
         )
     }
 }
@@ -941,6 +1015,52 @@ fun SkeletonRow(modifier: Modifier = Modifier) {
             Box(modifier = Modifier.fillMaxWidth(0.8f).height(14.dp).clip(RoundedCornerShape(4.dp)).background(NsColors.Skeleton.copy(alpha = alpha)))
             Spacer(Modifier.height(8.dp))
             Box(modifier = Modifier.fillMaxWidth(0.5f).height(12.dp).clip(RoundedCornerShape(4.dp)).background(NsColors.Skeleton.copy(alpha = alpha)))
+        }
+    }
+}
+
+/** v1.1.1 item 7: shimmer thumb + title lines for the channel grid skeleton. */
+@Composable
+fun SkeletonGridCard(modifier: Modifier = Modifier) {
+    val transition = androidx.compose.animation.core.rememberInfiniteTransition(label = "shimmerGrid")
+    val alpha by transition.animateFloat(
+        initialValue = 0.4f, targetValue = 0.8f,
+        animationSpec = androidx.compose.animation.core.infiniteRepeatable(
+            animation = tween(900),
+            repeatMode = androidx.compose.animation.core.RepeatMode.Reverse
+        ),
+        label = "shimmerGridAlpha"
+    )
+    Column(modifier = modifier.fillMaxWidth()) {
+        Box(modifier = Modifier.fillMaxWidth().aspectRatio(16f / 9f).clip(RoundedCornerShape(NsDimens.CornerThumb)).background(NsColors.Skeleton.copy(alpha = alpha)))
+        Spacer(Modifier.height(6.dp))
+        Box(modifier = Modifier.fillMaxWidth(0.8f).height(12.dp).clip(RoundedCornerShape(4.dp)).background(NsColors.Skeleton.copy(alpha = alpha)))
+        Spacer(Modifier.height(6.dp))
+        Box(modifier = Modifier.fillMaxWidth(0.5f).height(10.dp).clip(RoundedCornerShape(4.dp)).background(NsColors.Skeleton.copy(alpha = alpha)))
+    }
+}
+
+/**
+ * v1.1.1 item 7: infinite scroll with a visible fallback. The footer
+ * auto-loads once when it enters composition — gated: it only exists
+ * when the list is non-empty and hasMore is true (the NobiStream 1
+ * v2.6.3 lesson: an ungated trigger fires spuriously on an empty
+ * list). The button stays visible as the fallback when a page fails
+ * or auto-load stalls.
+ */
+@Composable
+fun LoadMoreFooter(loadingMore: Boolean, failed: Boolean, onLoadMore: () -> Unit) {
+    Column(
+        modifier = Modifier.fillMaxWidth().padding(vertical = 16.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        if (loadingMore) {
+            Text("Loading more videos…", style = MaterialTheme.typography.bodyMedium, color = NsColors.TextSecondary)
+        } else {
+            Button(onClick = onLoadMore) {
+                Text(if (failed) "Retry" else "Load more")
+            }
+            androidx.compose.runtime.LaunchedEffect(Unit) { onLoadMore() }
         }
     }
 }

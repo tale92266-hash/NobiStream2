@@ -25,16 +25,12 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -55,15 +51,22 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.nobi.nobistream2.core.AuthState
 import com.nobi.nobistream2.ui.AppViewModel
 import com.nobi.nobistream2.ui.components.PrimaryButton
+import com.nobi.nobistream2.ui.theme.ManropeFamily
 import com.nobi.nobistream2.ui.theme.NsColors
 import com.nobi.nobistream2.ui.theme.NsDimens
+import com.nobi.nobistream2.ui.theme.NsIcons
+import com.nobi.nobistream2.ui.theme.SoraFamily
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -125,43 +128,86 @@ fun LoginScreen(
         vm.ensureStarted()
     }
 
+    // v1.1.1 item 6: the login screen in the app's own language — dark
+    // navy tokens, Manrope + Sora, logo mark + wordmark, same pill
+    // buttons as the rest of the app. The FLOW and the 5-digit OTP
+    // field are untouched (style only).
     Column(
         modifier = Modifier
             .fillMaxSize()
+            .background(NsColors.Background)
             .padding(horizontal = NsDimens.ContentPadding, vertical = 32.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Top
     ) {
         Spacer(Modifier.height(48.dp))
-        Icon(Icons.Filled.PlayArrow, contentDescription = null, tint = NsColors.Primary, modifier = Modifier.size(56.dp))
+        Box(
+            modifier = Modifier
+                .size(64.dp)
+                .clip(RoundedCornerShape(18.dp))
+                .background(
+                    androidx.compose.ui.graphics.Brush.linearGradient(
+                        listOf(Color(0xFF2FB9F2), Color(0xFF1677B8))
+                    )
+                ),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(NsIcons.Play, contentDescription = null, tint = Color.White, modifier = Modifier.size(28.dp).padding(start = 3.dp))
+        }
         Spacer(Modifier.height(16.dp))
-        Text("NobiStream 2", style = MaterialTheme.typography.titleLarge, color = NsColors.TextPrimary)
+        Text(
+            androidx.compose.ui.text.buildAnnotatedString {
+                append("Nobi")
+                withStyle(androidx.compose.ui.text.SpanStyle(color = NsColors.AccentBright)) {
+                    append("Stream")
+                }
+            },
+            fontFamily = SoraFamily,
+            fontWeight = FontWeight.ExtraBold,
+            fontSize = 28.sp,
+            color = NsColors.TextPrimary
+        )
         Spacer(Modifier.height(8.dp))
         Text(
             "Sign in with Telegram",
-            style = MaterialTheme.typography.titleMedium,
+            fontFamily = SoraFamily,
+            fontWeight = FontWeight.ExtraBold,
+            fontSize = 18.sp,
             color = NsColors.TextPrimary
         )
         Spacer(Modifier.height(8.dp))
         Text(
             "Use your own Telegram account to watch videos from groups and channels you can already read.",
-            style = MaterialTheme.typography.bodyMedium,
-            color = NsColors.TextSecondary
+            fontFamily = ManropeFamily,
+            fontWeight = FontWeight.SemiBold,
+            fontSize = 14.sp,
+            color = NsColors.TextSecondary,
+            textAlign = TextAlign.Center
         )
         Spacer(Modifier.height(32.dp))
 
         if (!hasCreds && authState == AuthState.NEED_API_KEYS) {
-            Card(
-                colors = CardDefaults.cardColors(containerColor = NsColors.SurfaceVariant),
-                shape = RoundedCornerShape(16.dp),
+            Box(
                 modifier = Modifier.fillMaxWidth()
+                    .clip(RoundedCornerShape(NsDimens.CornerCard))
+                    .background(NsColors.Surface)
+                    .border(1.dp, NsColors.Divider, RoundedCornerShape(NsDimens.CornerCard))
+                    .padding(16.dp)
             ) {
-                Column(Modifier.padding(16.dp)) {
-                    Text("API credentials needed", style = MaterialTheme.typography.titleMedium, color = NsColors.Warning)
+                Column {
+                    Text(
+                        "API credentials needed",
+                        fontFamily = SoraFamily,
+                        fontWeight = FontWeight.ExtraBold,
+                        fontSize = 17.sp,
+                        color = NsColors.Warning
+                    )
                     Spacer(Modifier.height(4.dp))
                     Text(
                         "Open Settings and enter the free api_id and api_hash from my.telegram.org first. They are stored only on this phone.",
-                        style = MaterialTheme.typography.bodyMedium,
+                        fontFamily = ManropeFamily,
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 14.sp,
                         color = NsColors.TextSecondary
                     )
                     TextButton(onClick = onOpenSettings) { Text("Open Settings") }
@@ -180,14 +226,21 @@ fun LoginScreen(
             when (state) {
                 AuthState.NEED_PHONE, AuthState.NEED_API_KEYS, AuthState.UNKNOWN, AuthState.LOGGED_OUT -> {
                     Column {
-                        OutlinedTextField(
+                        ThemedLoginField(
                             value = phone,
                             onValueChange = { phone = it.filter { c -> c.isDigit() }.take(10) },
-                            label = { Text("Phone number") },
-                            prefix = { Text("+91 ") },
+                            label = "Phone number",
+                            prefix = {
+                                Text(
+                                    "+91 ",
+                                    fontFamily = ManropeFamily,
+                                    fontWeight = FontWeight.ExtraBold,
+                                    fontSize = 15.5.sp,
+                                    color = NsColors.AccentBright
+                                )
+                            },
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
-                            singleLine = true,
-                            modifier = Modifier.fillMaxWidth().height(NsDimens.InputHeight)
+                            modifier = Modifier.fillMaxWidth()
                         )
                         Spacer(Modifier.height(16.dp))
                         PrimaryButton(
@@ -283,18 +336,17 @@ fun LoginScreen(
                 }
                 AuthState.NEED_PASSWORD -> {
                     Column {
-                        OutlinedTextField(
+                        ThemedLoginField(
                             value = password,
                             onValueChange = { password = it },
-                            label = { Text("Two-step verification password") },
+                            label = "Two-step verification password",
                             visualTransformation = if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
                             trailingIcon = {
                                 IconButton(onClick = { passwordVisible = !passwordVisible }) {
                                     Icon(if (passwordVisible) Icons.Filled.VisibilityOff else Icons.Filled.Visibility, contentDescription = "Show password")
                                 }
                             },
-                            singleLine = true,
-                            modifier = Modifier.fillMaxWidth().height(NsDimens.InputHeight)
+                            modifier = Modifier.fillMaxWidth()
                         )
                         if (error != null) {
                             Spacer(Modifier.height(8.dp))
@@ -340,6 +392,70 @@ fun LoginScreen(
             Text("Settings")
         }
     }
+}
+
+/**
+ * v1.1.1 item 6: the app's own input (HTML link-input language:
+ * surface bg, 1px line border, 14dp radius, 50dp tall, Manrope).
+ * Same value/onValueChange/keyboard contract as the OutlinedTextField
+ * it replaces — the login FLOW is untouched, only the look changes.
+ */
+@Composable
+private fun ThemedLoginField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    label: String,
+    prefix: @Composable (() -> Unit)? = null,
+    trailingIcon: @Composable (() -> Unit)? = null,
+    keyboardOptions: KeyboardOptions = KeyboardOptions.Default,
+    visualTransformation: VisualTransformation = VisualTransformation.None,
+    modifier: Modifier = Modifier
+) {
+    BasicTextField(
+        value = value,
+        onValueChange = onValueChange,
+        singleLine = true,
+        keyboardOptions = keyboardOptions,
+        visualTransformation = visualTransformation,
+        textStyle = TextStyle(
+            fontFamily = ManropeFamily,
+            fontWeight = FontWeight.SemiBold,
+            fontSize = 15.5.sp,
+            color = NsColors.TextPrimary
+        ),
+        cursorBrush = SolidColor(NsColors.AccentBright),
+        decorationBox = { innerTextField ->
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(NsDimens.InputHeight)
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(NsColors.Surface)
+                    .border(1.dp, NsColors.Divider, RoundedCornerShape(14.dp))
+                    .padding(horizontal = 14.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                if (prefix != null) {
+                    prefix()
+                    Spacer(Modifier.width(2.dp))
+                }
+                Box(modifier = Modifier.weight(1f)) {
+                    if (value.isEmpty()) {
+                        Text(
+                            label,
+                            fontFamily = ManropeFamily,
+                            fontWeight = FontWeight.SemiBold,
+                            fontSize = 15.5.sp,
+                            color = NsColors.TextDisabled
+                        )
+                    }
+                    innerTextField()
+                }
+                if (trailingIcon != null) trailingIcon()
+            }
+        },
+        modifier = modifier
+    )
 }
 
 /**

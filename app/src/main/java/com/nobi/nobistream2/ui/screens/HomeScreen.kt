@@ -47,6 +47,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.nobi.nobistream2.core.FormatUtils
 import com.nobi.nobistream2.core.GroupItem
+import com.nobi.nobistream2.core.SmartFilter
 import com.nobi.nobistream2.core.VideoItem
 import com.nobi.nobistream2.ui.AppViewModel
 import com.nobi.nobistream2.ui.components.AddGroupSheet
@@ -104,7 +105,10 @@ fun HomeScreen(
         }
     }
 
-    val hero = continueWatching.firstOrNull()
+    // v1.1.1 item 11 (NobiStream 1 v2.6.1): one episode watched in two
+    // qualities must not appear twice in the hero / Continue row.
+    val continueDeduped = remember(continueWatching) { SmartFilter.dedupContinue(continueWatching) }
+    val hero = continueDeduped.firstOrNull()
     val heroGroup = hero?.let { v -> groups.firstOrNull { it.chatId == v.chatId } }
 
     Box(modifier = Modifier.fillMaxSize().background(NsColors.Background)) {
@@ -163,7 +167,7 @@ fun HomeScreen(
                                 vm = vm,
                                 video = hero,
                                 groupTitle = heroGroup?.title,
-                                onResume = { onPlayVideo(hero, continueWatching, hero.chatId, true) }
+                                onResume = { onPlayVideo(hero, continueDeduped, hero.chatId, true) }
                             )
                         }
                     }
@@ -512,9 +516,11 @@ fun ContinueAllScreen(
     onPlayVideo: (VideoItem, List<VideoItem>, Long, Boolean) -> Unit
 ) {
     val items by vm.repository.observeContinueWatchingAll().collectAsState(initial = emptyList())
+    // v1.1.1 item 11: same dedup as the hero — one episode, one row.
+    val dedupedItems = remember(items) { SmartFilter.dedupContinue(items) }
     Column(modifier = Modifier.fillMaxSize().background(NsColors.Background)) {
         AppTopBar(title = "Continue Watching", onBack = onBack)
-        if (items.isEmpty()) {
+        if (dedupedItems.isEmpty()) {
             EmptyState(
                 icon = Icons.Filled.Bookmark,
                 title = "Nothing to continue",
@@ -525,11 +531,11 @@ fun ContinueAllScreen(
                 modifier = Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(horizontal = NsDimens.ContentPadding, vertical = 8.dp)
             ) {
-                items(items, key = { it.chatId to it.messageId }) { video ->
+                items(dedupedItems, key = { it.chatId to it.messageId }) { video ->
                     com.nobi.nobistream2.ui.components.VideoCard(
                         repo = vm.repository,
                         item = video,
-                        onClick = { onPlayVideo(video, items, video.chatId, true) }
+                        onClick = { onPlayVideo(video, dedupedItems, video.chatId, true) }
                     )
                 }
             }
