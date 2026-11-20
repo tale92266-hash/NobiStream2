@@ -11,8 +11,10 @@ import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.DefaultLoadControl
+import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.ProgressiveMediaSource
+import io.github.anilbeesetti.nextlib.media3ext.ffdecoder.NextRenderersFactory
 import com.nobi.nobistream2.core.SmartFilter
 import com.nobi.nobistream2.core.VideoItem
 import com.nobi.nobistream2.data.NobiRepository
@@ -105,6 +107,8 @@ class PlayerSession(private val context: Context) {
     var chatId: Long = 0L
         private set
     private var index: Int = 0
+    /** v1.1.2 item 5: position to keep across a quality switch. */
+    private var switchSeekMs: Long? = null
     private var stallRetryCount = 0
     private var stallJob: Job? = null
     private var saveJob: Job? = null
@@ -141,7 +145,21 @@ class PlayerSession(private val context: Context) {
             .setBufferDurationsMs(50_000, 120_000, 1_000, 2_000)
             .setBackBuffer(30_000, true)
             .build()
+        // v1.1.2 item 1: FFmpeg software audio decoders (NextLib
+        // prebuilt extension, media3 1.8.0 — same route as NobiStream 1
+        // v9.7). EXTENSION_RENDERER_MODE_ON keeps the platform
+        // (hardware) decoders first — AAC still decodes in hardware —
+        // and falls back to FFmpeg software decode only for codecs
+        // this device has no decoder for (E-AC-3/DTS/TrueHD in the
+        // high-quality copies, which played silent before). PREFER
+        // would route ALL audio through software decode; ON is the
+        // right mode here. setEnableDecoderFallback also lets a
+        // MediaCodec decoder failure fall back to FFmpeg.
+        val renderersFactory = NextRenderersFactory(context)
+            .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON)
+            .setEnableDecoderFallback(true)
         player = ExoPlayer.Builder(context)
+            .setRenderersFactory(renderersFactory)
             .setLoadControl(loadControl)
             .setMediaSourceFactory(mediaSourceFactory)
             .build()
@@ -208,11 +226,17 @@ class PlayerSession(private val context: Context) {
                 currentItemUnresolvable = detailed?.freshIdResolved == false
                 val resumable = saved > 5L && resolved.durationSec > 0 &&
                     saved < resolved.durationSec - 10L
-                val targetMs = if (resumable) {
+                val savedMs = if (resumable) {
                     saved.coerceIn(0L, resolved.durationSec * 1000L - 2_000L) * 1000L
                 } else {
                     0L
                 }
+                // v1.1.2 item 5: a quality switch keeps the position —
+                // the picked copy's own saved position is usually 0.
+                val targetMs = switchSeekMs
+                    ?.coerceIn(0L, (resolved.durationSec * 1000L).coerceAtLeast(0L))
+                    ?: savedMs
+                switchSeekMs = null
                 val mediaItem = MediaItem.Builder().setUri("tdlib://${resolved.fileId}").build()
                 exo.setMediaItem(mediaItem, targetMs)
                 exo.prepare()
@@ -224,6 +248,26 @@ class PlayerSession(private val context: Context) {
 
     fun next() = playAt(index + 1)
     fun previous() = playAt(index - 1)
+
+    /**
+     * v1.1.2 item 5: switch playback to another copy of the SAME
+     * episode (quality picker). The copy is swapped in for the
+     * current item at the same playlist index, so Next/Previous keep
+     * working from this episode; the position is kept (YouTube-like)
+     * via [switchSeekMs] instead of restarting from the copy's own
+     * saved position (usually 0).
+     */
+    fun playCopy(copy: VideoItem) {
+        val exo = player ?: return
+        if (index !in playlist.indices) return
+        switchSeekMs = exo.currentPosition
+        val list = playlist.toMutableList()
+        list[index] = copy
+        playlist = list
+        PlayerPlaylist.items = list
+        _current.value = copy
+        playAt(index)
+    }
     fun togglePlayPause() {
         val exo = player ?: return
         if (exo.isPlaying) exo.pause() else exo.play()

@@ -33,9 +33,12 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -44,10 +47,12 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
@@ -63,7 +68,10 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.media3.ui.PlayerView
 import com.nobi.nobistream2.core.FormatUtils
+import com.nobi.nobistream2.core.SmartFilter
+import com.nobi.nobistream2.core.VideoItem
 import com.nobi.nobistream2.data.NobiRepository
+import com.nobi.nobistream2.ui.components.CopiesSheet
 import com.nobi.nobistream2.ui.components.ErrorState
 import com.nobi.nobistream2.ui.components.VideoThumb
 import com.nobi.nobistream2.ui.player.PlayerSession
@@ -73,6 +81,7 @@ import com.nobi.nobistream2.ui.theme.NsDimens
 import com.nobi.nobistream2.ui.theme.NsIcons
 import com.nobi.nobistream2.ui.theme.SoraFamily
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.math.abs
 import kotlin.math.roundToInt
@@ -119,6 +128,31 @@ fun PlayerScreen(
     var stepOverlayTick by remember { mutableIntStateOf(0) }
     var holding2x by remember { mutableStateOf(false) }
     var prevSpeed by remember { mutableStateOf(1f) }
+    // v1.1.2 item 7b: lock cluster (title + seekbar + unlock) shows
+    // and hides TOGETHER on one 3s timer — NS1 v9.9 pattern. The tick
+    // restarts the timer on every tap.
+    var lockClusterVisible by remember { mutableStateOf(false) }
+    var lockClusterTick by remember { mutableIntStateOf(0) }
+    // v1.1.2 item 5: quality picker — copies of this episode.
+    var qualityPickerOpen by remember { mutableStateOf(false) }
+    var pickerCopies by remember { mutableStateOf<List<VideoItem>?>(null) }
+    var pickerLoading by remember { mutableStateOf(false) }
+    var pickerError by remember { mutableStateOf(false) }
+    // v1.1.2 item 7a: seek preview — where the drag WILL land, shown
+    // first; the seek commits only on release.
+    var seekPreviewMs by remember { mutableStateOf<Long?>(null) }
+    val scope = rememberCoroutineScope()
+    // A new episode invalidates any picker copies loaded for the old one.
+    LaunchedEffect(current?.messageId) {
+        pickerCopies = null
+        pickerError = false
+    }
+    LaunchedEffect(lockClusterVisible, lockClusterTick) {
+        if (lockClusterVisible) {
+            delay(3000)
+            lockClusterVisible = false
+        }
+    }
     // The gesture detector reads controlsVisible through a ref so it is
     // not restarted (and a drag cancelled) when controls auto-hide.
     val controlsVisibleRef = rememberUpdatedState(controlsVisible)
@@ -203,8 +237,26 @@ fun PlayerScreen(
     val progress = if (durationMs > 0) (positionMs.toFloat() / durationMs.toFloat()).coerceIn(0f, 1f) else 0f
     val buffered = ((session.player?.bufferedPercentage ?: 0) / 100f).coerceIn(0f, 1f)
 
+    // v1.1.2 item 5: (re)load this episode's copies for the picker.
+    val loadPickerCopies: () -> Unit = {
+        val cur = item
+        if (cur != null && !pickerLoading) {
+            pickerLoading = true
+            pickerError = false
+            scope.launch {
+                pickerCopies = if (session.downloadLocalPath != null) {
+                    listOf(cur)
+                } else {
+                    loadCopiesFor(repo, session.chatId, cur)
+                }
+                pickerLoading = false
+                if (pickerCopies == null) pickerError = true
+            }
+        }
+    }
+
     Column(modifier = Modifier.fillMaxSize().background(Color.Black)) {
-        Box(
+        BoxWithConstraints(
             modifier = Modifier
                 .fillMaxWidth()
                 .then(if (fullscreen) Modifier.fillMaxSize() else Modifier.aspectRatio(16f / 9f))
@@ -236,8 +288,25 @@ fun PlayerScreen(
                     awaitEachGesture {
                         val down = awaitFirstDown()
                         if (locked) {
-                            waitForUpOrCancellation()
-                            return@awaitEachGesture
+                            // v1.1.2 item 7b: a tap while locked shows
+                            // the lock cluster (title + seekbar +
+                            // unlock) together, NS1 v9.9 pattern.
+                            // Drags are ignored. Changes are NOT
+                            // consumed here, so the unlock button
+                            // itself still receives its tap.
+                            var moved = false
+                            while (true) {
+                                val event = awaitPointerEvent()
+                                val change = event.changes.firstOrNull { it.id == down.id } ?: continue
+                                if (!change.pressed) {
+                                    if (!moved) {
+                                        lockClusterVisible = true
+                                        lockClusterTick++
+                                    }
+                                    return@awaitEachGesture
+                                }
+                                if ((change.position - down.position).getDistance() > touchSlop) moved = true
+                            }
                         }
                         val startX = down.position.x
                         val startY = down.position.y
@@ -378,6 +447,13 @@ fun PlayerScreen(
                     }
                 }
         ) {
+            // v1.1.2 item 3: the 68dp pause circle must never touch
+            // the seekbar. The bottom controls are ~107dp tall and
+            // the seekbar track sits ~19dp into them, so the circle's
+            // bottom must clear (maxHeight - 92dp). Shift the centre
+            // row up only as much as needed — fullscreen (tall)
+            // needs none, portrait 16:9 needs ~16dp.
+            val centerShiftUp = (126.dp - maxHeight / 2).coerceAtLeast(0.dp)
             AndroidView(
                 factory = { ctx ->
                     PlayerView(ctx).apply {
@@ -441,8 +517,10 @@ fun PlayerScreen(
                     Text(gestureLabel!!, color = Color.White)
                 }
             }
-            // Top bar: back (X) + title. Locked: title hidden, lock button stays tappable.
-            if (controlsVisible || locked) {
+            // Top bar: back (X) + title. Locked: it belongs to the
+            // lock cluster — title + unlock button show TOGETHER
+            // (v1.1.2 item 7b, NS1 v9.9 pattern).
+            if (controlsVisible || lockClusterVisible) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -458,29 +536,36 @@ fun PlayerScreen(
                     IconButton(onClick = { session.stopAndSave(); onBack() }, modifier = Modifier.size(42.dp)) {
                         Icon(NsIcons.Close, contentDescription = "Back", tint = Color.White, modifier = Modifier.size(21.dp))
                     }
-                    if (!locked) {
-                        Text(
-                            item?.title ?: "",
-                            fontFamily = ManropeFamily,
-                            fontWeight = FontWeight.ExtraBold,
-                            fontSize = 14.5.sp,
-                            color = Color.White,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.weight(1f)
-                        )
-                    } else {
-                        Spacer(Modifier.weight(1f))
-                        IconButton(onClick = { locked = false }, modifier = Modifier.size(42.dp)) {
+                    Text(
+                        item?.title ?: "",
+                        fontFamily = ManropeFamily,
+                        fontWeight = FontWeight.ExtraBold,
+                        fontSize = 14.5.sp,
+                        color = Color.White,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f)
+                    )
+                    if (locked) {
+                        IconButton(
+                            onClick = {
+                                locked = false
+                                lockClusterVisible = false
+                                controlsVisible = true
+                            },
+                            modifier = Modifier.size(42.dp)
+                        ) {
                             Icon(NsIcons.Lock, contentDescription = "Unlock controls", tint = Color.White, modifier = Modifier.size(21.dp))
                         }
                     }
                 }
             }
-            // Centre controls.
+            // Centre controls. v1.1.2 item 3: shifted up just enough
+            // that the 68dp pause circle never touches the seekbar
+            // (portrait 16:9); fullscreen needs no shift.
             if (controlsVisible && !locked) {
                 Row(
-                    modifier = Modifier.align(Alignment.Center),
+                    modifier = Modifier.align(Alignment.Center).offset(y = -centerShiftUp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(34.dp)
                 ) {
@@ -538,89 +623,106 @@ fun PlayerScreen(
                         )
                         .padding(start = 14.dp, end = 14.dp, bottom = 12.dp, top = 8.dp)
                 ) {
-                    BoxWithConstraints(
-                        modifier = Modifier.fillMaxWidth().height(22.dp)
-                            .pointerInput(durationMs) {
-                                // v1.1.1 item 4: drag the seekbar itself
-                                // to scrub (live seek while dragging). The
-                                // tap detector on the track still owns taps.
-                                detectHorizontalDragGestures { change, _ ->
-                                    if (durationMs > 0) {
-                                        val frac = (change.position.x / size.width.toFloat())
-                                            .coerceIn(0f, 1f)
-                                        session.seekTo((frac * durationMs).toLong())
-                                    }
-                                    change.consume()
-                                }
+                    // v1.1.2 item 7a: reserved preview strip — the
+                    // scrub-time bubble lives here while dragging, so
+                    // the layout never shifts under the finger.
+                    BoxWithConstraints(Modifier.fillMaxWidth().height(20.dp)) {
+                        val preview = seekPreviewMs
+                        if (preview != null && durationMs > 0) {
+                            val frac = (preview.toFloat() / durationMs.toFloat()).coerceIn(0f, 1f)
+                            Box(
+                                modifier = Modifier
+                                    .offset(x = ((maxWidth * frac) - 26.dp).coerceIn(0.dp, maxWidth - 52.dp))
+                                    .background(Color.Black.copy(alpha = 0.75f), RoundedCornerShape(6.dp))
+                                    .padding(horizontal = 8.dp, vertical = 3.dp)
+                            ) {
+                                Text(
+                                    fmtClock((preview / 1000).toInt()),
+                                    fontFamily = ManropeFamily,
+                                    fontWeight = FontWeight.ExtraBold,
+                                    fontSize = 12.sp,
+                                    color = Color.White
+                                )
                             }
-                    ) {
-                        val trackWidth = maxWidth
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(4.5.dp)
-                                .align(Alignment.Center)
-                                .clip(RoundedCornerShape(999.dp))
-                                .background(Color.White.copy(alpha = 0.28f))
-                                .pointerInput(durationMs) {
-                                    detectTapGestures { offset ->
+                        }
+                    }
+                    // v1.1.2 items 6/7a: drag the seekbar to scrub —
+                    // the target time shows FIRST (bubble + dot move
+                    // to the preview position) and the seek commits
+                    // only on release, then buffers. A tap still
+                    // jumps immediately.
+                    val shownFrac = seekPreviewMs?.let {
+                        (it.toFloat() / durationMs.toFloat()).coerceIn(0f, 1f)
+                    } ?: progress
+                    Box(
+                        modifier = Modifier.fillMaxWidth()
+                            .pointerInput(durationMs) {
+                                detectHorizontalDragGestures(
+                                    onDragStart = { offset ->
                                         if (durationMs > 0) {
                                             val frac = (offset.x / size.width.toFloat()).coerceIn(0f, 1f)
-                                            session.seekTo((frac * durationMs).toLong())
+                                            seekPreviewMs = (frac * durationMs).toLong()
                                         }
+                                    },
+                                    onDragEnd = {
+                                        val target = seekPreviewMs
+                                        seekPreviewMs = null
+                                        if (target != null) session.seekTo(target)
+                                    },
+                                    onDragCancel = { seekPreviewMs = null },
+                                    onHorizontalDrag = { change, _ ->
+                                        if (durationMs > 0) {
+                                            val frac = (change.position.x / size.width.toFloat()).coerceIn(0f, 1f)
+                                            seekPreviewMs = (frac * durationMs).toLong()
+                                        }
+                                        change.consume()
+                                    }
+                                )
+                            }
+                    ) {
+                        SeekbarVisual(
+                            progressFrac = shownFrac,
+                            bufferedFrac = buffered,
+                            trackModifier = Modifier.pointerInput(durationMs) {
+                                detectTapGestures { offset ->
+                                    if (durationMs > 0) {
+                                        val frac = (offset.x / size.width.toFloat()).coerceIn(0f, 1f)
+                                        session.seekTo((frac * durationMs).toLong())
                                     }
                                 }
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth(buffered)
-                                    .height(4.5.dp)
-                                    .clip(RoundedCornerShape(999.dp))
-                                    .background(Color.White.copy(alpha = 0.45f))
-                            )
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth(progress)
-                                    .height(4.5.dp)
-                                    .clip(RoundedCornerShape(999.dp))
-                                    .background(NsColors.AccentBright)
-                            )
-                        }
-                        Box(
-                            modifier = Modifier
-                                .offset(x = ((trackWidth * progress) - 7.dp).coerceAtLeast(0.dp))
-                                .align(Alignment.CenterStart)
-                                .size(14.dp)
-                                .clip(CircleShape)
-                                .background(NsColors.AccentBright)
+                            }
                         )
                     }
-                    Row(
-                        modifier = Modifier.fillMaxWidth().padding(top = 1.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Text(
-                            fmtClock(positionSec),
-                            fontFamily = ManropeFamily,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 12.sp,
-                            color = NsColors.TimeRow
-                        )
-                        Text(
-                            "-${fmtClock(remainingSec)} · ${fmtClock(durationSec)}",
-                            fontFamily = ManropeFamily,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 12.sp,
-                            color = NsColors.TimeRow
-                        )
-                    }
+                    PlayerTimeRow(positionSec, remainingSec, durationSec)
                     Row(
                         modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        IconButton(onClick = { session.previous() }, modifier = Modifier.size(44.dp)) {
-                            Icon(NsIcons.Previous, contentDescription = "Previous episode", tint = Color.White, modifier = Modifier.size(21.dp))
+                        IconButton(
+                            onClick = { session.previous() },
+                            enabled = index > 0,
+                            modifier = Modifier.size(44.dp)
+                        ) {
+                            Icon(
+                                NsIcons.Previous,
+                                contentDescription = "Previous episode",
+                                tint = if (index > 0) Color.White else Color.White.copy(alpha = 0.4f),
+                                modifier = Modifier.size(21.dp)
+                            )
+                        }
+                        // v1.1.2 item 4: Next episode button.
+                        IconButton(
+                            onClick = { session.next() },
+                            enabled = index < playlistSize - 1,
+                            modifier = Modifier.size(44.dp)
+                        ) {
+                            Icon(
+                                NsIcons.Next,
+                                contentDescription = "Next episode",
+                                tint = if (index < playlistSize - 1) Color.White else Color.White.copy(alpha = 0.4f),
+                                modifier = Modifier.size(21.dp)
+                            )
                         }
                         IconButton(
                             onClick = {
@@ -639,13 +741,20 @@ fun PlayerScreen(
                                 modifier = Modifier.size(21.dp)
                             )
                         }
-                        // Quality badge (display only — each Telegram quality is a separate whole file, no ABR).
-                        // v1.1.1 item 1: HTML's badge is a compact pill
-                        // (padding 4px 7px, radius 7px), not a 44dp-tall box.
+                        // v1.1.2 item 5: quality badge opens the
+                        // quality picker — this episode's copies, best
+                        // first; tap one to switch to it. The badge
+                        // always shows the quality ACTUALLY playing.
+                        // (Each Telegram quality is a separate whole
+                        // file, no ABR.)
                         Box(
                             modifier = Modifier
                                 .border(1.6.dp, Color.White.copy(alpha = 0.75f), RoundedCornerShape(7.dp))
-                                .padding(horizontal = 7.dp, vertical = 5.dp),
+                                .padding(horizontal = 7.dp, vertical = 5.dp)
+                                .clickable(enabled = item != null) {
+                                    qualityPickerOpen = true
+                                    if (pickerCopies == null) loadPickerCopies()
+                                },
                             contentAlignment = Alignment.Center
                         ) {
                             Text(
@@ -656,7 +765,14 @@ fun PlayerScreen(
                                 color = Color.White
                             )
                         }
-                        IconButton(onClick = { locked = true }, modifier = Modifier.size(44.dp)) {
+                        IconButton(
+                            onClick = {
+                                locked = true
+                                lockClusterVisible = true
+                                lockClusterTick++
+                            },
+                            modifier = Modifier.size(44.dp)
+                        ) {
                             Icon(NsIcons.Lock, contentDescription = "Lock controls", tint = Color.White, modifier = Modifier.size(21.dp))
                         }
                         IconButton(
@@ -673,6 +789,27 @@ fun PlayerScreen(
                             Icon(NsIcons.Fullscreen, contentDescription = "Fullscreen", tint = Color.White, modifier = Modifier.size(21.dp))
                         }
                     }
+                }
+            }
+            // v1.1.2 item 7b: lock cluster, bottom half — the seekbar
+            // + time row, dimmed and dead (no gestures), shown TOGETHER
+            // with the top bar (title + unlock) on the same 3s timer.
+            // NS1 v9.9 pattern: no toast, cluster moves as one.
+            if (locked && lockClusterVisible) {
+                Column(
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .fillMaxWidth()
+                        .alpha(0.5f)
+                        .background(
+                            androidx.compose.ui.graphics.Brush.verticalGradient(
+                                listOf(Color.Transparent, Color.Black.copy(alpha = 0.72f))
+                            )
+                        )
+                        .padding(start = 14.dp, end = 14.dp, bottom = 12.dp, top = 8.dp)
+                ) {
+                    SeekbarVisual(progressFrac = progress, bufferedFrac = buffered)
+                    PlayerTimeRow(positionSec, remainingSec, durationSec)
                 }
             }
             if (error != null) {
@@ -760,55 +897,76 @@ fun PlayerScreen(
                                 )
                             }
                         }
-                        // v1.1.1 item 12: the next 2-3 episodes (real
-                        // data, deduped playlist order); tap plays that
-                        // episode. Fewer than 3 remaining = fewer rows,
-                        // never fake rows.
-                        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        // v1.1.2 item 2: BIG cards — a large 16/9
+                        // thumb with the name BELOW it, so the space
+                        // below the player is full, not empty. Real
+                        // data, deduped playlist order; tap plays
+                        // that episode. Fewer than 3 remaining =
+                        // fewer cards, never fake rows.
+                        Column(verticalArrangement = Arrangement.spacedBy(18.dp)) {
                             upNext.forEachIndexed { offset, upItem ->
-                                Row(
+                                Column(
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .clickable { session.playAt(index + 1 + offset) },
-                                    verticalAlignment = Alignment.CenterVertically
+                                        .clickable { session.playAt(index + 1 + offset) }
                                 ) {
                                     VideoThumb(
                                         repo = repo,
                                         item = upItem,
                                         showBadges = false,
-                                        modifier = Modifier.width(96.dp).aspectRatio(16f / 9f)
+                                        modifier = Modifier.fillMaxWidth().aspectRatio(16f / 9f)
                                     )
-                                    Spacer(Modifier.width(12.dp))
-                                    Column(modifier = Modifier.weight(1f)) {
-                                        Text(
-                                            upItem.title,
-                                            fontFamily = ManropeFamily,
-                                            fontWeight = FontWeight.ExtraBold,
-                                            fontSize = 14.5.sp,
-                                            color = NsColors.TextPrimary,
-                                            maxLines = 2,
-                                            overflow = TextOverflow.Ellipsis
-                                        )
-                                        Text(
-                                            listOfNotNull(
-                                                upItem.quality.label.takeIf { upItem.quality.label != "Unknown" },
-                                                FormatUtils.formatDuration(upItem.durationSec).takeIf { upItem.durationSec > 0 },
-                                                FormatUtils.formatSize(upItem.sizeBytes).takeIf { upItem.sizeBytes > 0 }
-                                            ).joinToString(" · "),
-                                            fontFamily = ManropeFamily,
-                                            fontWeight = FontWeight.SemiBold,
-                                            fontSize = 12.sp,
-                                            color = NsColors.TextSecondary,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis,
-                                            modifier = Modifier.padding(top = 2.dp)
-                                        )
-                                    }
+                                    Text(
+                                        upItem.title,
+                                        fontFamily = ManropeFamily,
+                                        fontWeight = FontWeight.ExtraBold,
+                                        fontSize = 15.sp,
+                                        color = NsColors.TextPrimary,
+                                        maxLines = 2,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.padding(top = 9.dp)
+                                    )
+                                    Text(
+                                        listOfNotNull(
+                                            upItem.quality.label.takeIf { upItem.quality.label != "Unknown" },
+                                            FormatUtils.formatDuration(upItem.durationSec).takeIf { upItem.durationSec > 0 },
+                                            FormatUtils.formatSize(upItem.sizeBytes).takeIf { upItem.sizeBytes > 0 }
+                                        ).joinToString(" · "),
+                                        fontFamily = ManropeFamily,
+                                        fontWeight = FontWeight.SemiBold,
+                                        fontSize = 12.5.sp,
+                                        color = NsColors.TextSecondary,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.padding(top = 2.dp)
+                                    )
                                 }
                             }
                         }
                     }
                 }
+            }
+        }
+        // v1.1.2 item 5: quality picker — this episode's copies,
+        // best first; tap one to switch playback to it (position
+        // kept). Reuses the v1.1.1 CopiesSheet for the list itself.
+        if (qualityPickerOpen) {
+            val copies = pickerCopies
+            if (copies != null) {
+                CopiesSheet(
+                    copies = copies,
+                    onPick = { copy ->
+                        qualityPickerOpen = false
+                        session.playCopy(copy)
+                    },
+                    onDismiss = { qualityPickerOpen = false }
+                )
+            } else {
+                QualityPickerStateSheet(
+                    loading = pickerLoading,
+                    onRetry = { loadPickerCopies() },
+                    onDismiss = { qualityPickerOpen = false }
+                )
             }
         }
     }
@@ -876,6 +1034,192 @@ private fun fmtClock(totalSeconds: Int): String {
     val sec = s % 60
     return if (h > 0) "%d:%02d:%02d".format(h, m, sec)
     else "%02d:%02d".format(m, sec)
+}
+
+/**
+ * v1.1.2 item 6: three-colour seek track — played (accent-bright),
+ * buffered-but-not-played (translucent accent), remaining (dark).
+ * The buffered segment comes from the player's real
+ * bufferedPercentage; it never fakes progress.
+ */
+@Composable
+private fun SeekTrack(progressFrac: Float, bufferedFrac: Float, modifier: Modifier = Modifier) {
+    Box(
+        modifier = modifier
+            .fillMaxWidth()
+            .height(4.5.dp)
+            .clip(RoundedCornerShape(999.dp))
+            .background(Color.White.copy(alpha = 0.28f))
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth(bufferedFrac.coerceIn(0f, 1f))
+                .height(4.5.dp)
+                .clip(RoundedCornerShape(999.dp))
+                .background(NsColors.AccentBright.copy(alpha = 0.45f))
+        )
+        Box(
+            modifier = Modifier
+                .fillMaxWidth(progressFrac.coerceIn(0f, 1f))
+                .height(4.5.dp)
+                .clip(RoundedCornerShape(999.dp))
+                .background(NsColors.AccentBright)
+        )
+    }
+}
+
+/**
+ * v1.1.2 items 6/7: the seekbar visual only (track + dot), no
+ * gestures — used by the interactive seekbar and by the locked
+ * (dimmed, dead) seekbar alike. [trackModifier] lets the caller
+ * attach the tap detector to the track itself.
+ */
+@Composable
+private fun SeekbarVisual(
+    progressFrac: Float,
+    bufferedFrac: Float,
+    trackModifier: Modifier = Modifier
+) {
+    BoxWithConstraints(Modifier.fillMaxWidth().height(22.dp)) {
+        SeekTrack(
+            progressFrac = progressFrac,
+            bufferedFrac = bufferedFrac,
+            modifier = Modifier.align(Alignment.Center).then(trackModifier)
+        )
+        Box(
+            modifier = Modifier
+                .offset(x = ((maxWidth * progressFrac.coerceIn(0f, 1f)) - 7.dp).coerceAtLeast(0.dp))
+                .align(Alignment.CenterStart)
+                .size(14.dp)
+                .clip(CircleShape)
+                .background(NsColors.AccentBright)
+        )
+    }
+}
+
+/** Time row under the seekbar: elapsed left, remaining · total right. */
+@Composable
+private fun PlayerTimeRow(positionSec: Int, remainingSec: Int, durationSec: Int) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(top = 1.dp),
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Text(
+            fmtClock(positionSec),
+            fontFamily = ManropeFamily,
+            fontWeight = FontWeight.Bold,
+            fontSize = 12.sp,
+            color = NsColors.TimeRow
+        )
+        Text(
+            "-${fmtClock(remainingSec)} · ${fmtClock(durationSec)}",
+            fontFamily = ManropeFamily,
+            fontWeight = FontWeight.Bold,
+            fontSize = 12.sp,
+            color = NsColors.TimeRow
+        )
+    }
+}
+
+/**
+ * v1.1.2 item 5: the quality picker's loading / error state. The
+ * success state reuses the v1.1.1 CopiesSheet directly.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun QualityPickerStateSheet(
+    loading: Boolean,
+    onRetry: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState()) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(20.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text(
+                "Choose quality",
+                fontFamily = SoraFamily,
+                fontWeight = FontWeight.ExtraBold,
+                fontSize = 20.sp,
+                color = NsColors.TextPrimary,
+                modifier = Modifier.fillMaxWidth()
+            )
+            Spacer(Modifier.height(16.dp))
+            if (loading) {
+                CircularProgressIndicator(color = NsColors.AccentBright)
+                Spacer(Modifier.height(12.dp))
+                Text(
+                    "Loading copies…",
+                    fontFamily = ManropeFamily,
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 13.sp,
+                    color = NsColors.TextSecondary
+                )
+            } else {
+                Text(
+                    "Copies couldn't be loaded. Check your connection and try again.",
+                    fontFamily = ManropeFamily,
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 13.sp,
+                    color = NsColors.TextSecondary
+                )
+                Spacer(Modifier.height(16.dp))
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(999.dp))
+                        .background(NsColors.Primary.copy(alpha = 0.14f))
+                        .clickable { onRetry() }
+                        .padding(horizontal = 18.dp, vertical = 10.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        "Retry",
+                        fontFamily = ManropeFamily,
+                        fontWeight = FontWeight.ExtraBold,
+                        fontSize = 14.sp,
+                        color = NsColors.AccentBright
+                    )
+                }
+            }
+            Spacer(Modifier.height(16.dp))
+        }
+    }
+}
+
+/**
+ * v1.1.2 item 5: load this episode's copies for the quality picker.
+ * Pages the channel list (TDLib, local DB — fast) until the group
+ * containing [item] is found, then one extra page to catch
+ * stragglers. Returns the copies best-first, or null when the group
+ * could not be found / loading failed.
+ */
+private suspend fun loadCopiesFor(repo: NobiRepository, chatId: Long, item: VideoItem): List<VideoItem>? {
+    val collected = mutableListOf<VideoItem>()
+    var fromId = 0L
+    var pages = 0
+    while (pages < 12) {
+        pages++
+        val page = runCatching { repo.loadVideos(chatId, fromId, 50) }.getOrNull() ?: return null
+        collected.addAll(page.videos)
+        val groups = SmartFilter.groupEpisodes(collected)
+        val group = groups.firstOrNull { g ->
+            g.copies.any { it.messageId == item.messageId && it.chatId == item.chatId }
+        }
+        if (group != null) {
+            if (page.rawCount >= 50 && page.lastMessageId > 0L && pages < 12) {
+                runCatching { repo.loadVideos(chatId, page.lastMessageId, 50) }
+                    .getOrNull()?.let { collected.addAll(it.videos) }
+            }
+            return SmartFilter.groupEpisodes(collected)
+                .firstOrNull { g ->
+                    g.copies.any { it.messageId == item.messageId && it.chatId == item.chatId }
+                }?.copies
+        }
+        if (page.rawCount < 50 || page.lastMessageId <= 0L) break
+        fromId = page.lastMessageId
+    }
+    return null
 }
 
 /** Mini-player — 72dp, above the bottom nav, slide-up. */

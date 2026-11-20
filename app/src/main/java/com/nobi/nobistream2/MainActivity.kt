@@ -11,8 +11,10 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -26,7 +28,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -63,6 +67,8 @@ import com.nobi.nobistream2.ui.theme.ManropeFamily
 import com.nobi.nobistream2.ui.theme.NobiStream2Theme
 import com.nobi.nobistream2.ui.theme.NsColors
 import com.nobi.nobistream2.ui.theme.NsIcons
+import com.nobi.nobistream2.ui.theme.SoraFamily
+import kotlinx.coroutines.delay
 
 /**
  * Single-activity Compose app. Bottom nav (HTML redesign v1.1.0):
@@ -136,6 +142,22 @@ fun NobiStream2App(
         }
     }
 
+    // v1.1.2 item 9: the app used to start at "login" and navigate to
+    // "home" once the auth state resolved — on a saved session the
+    // login screen flashed for a frame on every cold open. Hold a
+    // stable first frame (splash) until auth resolves, then start the
+    // NavHost at the right destination directly. 5s safety valve so
+    // a stuck auth check can never trap the app on the splash.
+    var authTimedOut by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        delay(5000)
+        authTimedOut = true
+    }
+    if (authState == AuthState.UNKNOWN && !authTimedOut) {
+        SplashScreen()
+        return
+    }
+
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) },
         containerColor = NsColors.Background,
@@ -156,7 +178,10 @@ fun NobiStream2App(
         }
     ) { innerPadding ->
         Box(modifier = Modifier.fillMaxSize().padding(innerPadding)) {
-            NavHost(navController = navController, startDestination = "login") {
+            NavHost(
+                navController = navController,
+                startDestination = if (authState == AuthState.READY) "home" else "login"
+            ) {
                 composable("login") {
                     LoginScreen(
                         vm = vm,
@@ -348,5 +373,54 @@ fun NsBottomNav(currentRoute: String?, onNavigate: (String) -> Unit) {
                 )
             }
         }
+    }
+}
+
+/**
+ * v1.1.2 item 9: stable first frame while the auth state resolves —
+ * app background + the same logo mark and wordmark as the login
+ * screen. No buttons, no flicker: the NavHost only appears once the
+ * right start destination is known.
+ */
+@Composable
+private fun SplashScreen() {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(NsColors.Background),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        Box(
+            modifier = Modifier
+                .size(64.dp)
+                .clip(RoundedCornerShape(18.dp))
+                .background(
+                    androidx.compose.ui.graphics.Brush.linearGradient(
+                        listOf(Color(0xFF2FB9F2), Color(0xFF1677B8))
+                    )
+                ),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                NsIcons.Play,
+                contentDescription = null,
+                tint = Color.White,
+                modifier = Modifier.size(28.dp).padding(start = 3.dp)
+            )
+        }
+        Spacer(Modifier.height(16.dp))
+        Text(
+            androidx.compose.ui.text.buildAnnotatedString {
+                append("Nobi")
+                withStyle(androidx.compose.ui.text.SpanStyle(color = NsColors.AccentBright)) {
+                    append("Stream")
+                }
+            },
+            fontFamily = SoraFamily,
+            fontWeight = FontWeight.ExtraBold,
+            fontSize = 28.sp,
+            color = NsColors.TextPrimary
+        )
     }
 }

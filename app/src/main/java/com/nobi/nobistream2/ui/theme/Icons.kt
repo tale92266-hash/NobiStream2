@@ -142,6 +142,12 @@ object NsIcons {
         "M6 5v14M19 5l-9.5 7L19 19z"
     )
 
+    /** Next episode (filled) — mirror of Previous. v1.1.2 item 4. */
+    val Next: ImageVector = fillIcon(
+        "NsNext",
+        "M18 5v14M5 5l9.5 7L5 19z"
+    )
+
     /** Subtitles (CC) — rect + two arcs. */
     val Captions: ImageVector = strokeIcon(
         "NsCaptions", 2f,
