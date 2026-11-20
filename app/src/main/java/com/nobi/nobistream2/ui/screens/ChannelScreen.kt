@@ -58,6 +58,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import com.nobi.nobistream2.core.EpisodeGroup
@@ -65,6 +66,7 @@ import com.nobi.nobistream2.core.FormatUtils
 import com.nobi.nobistream2.core.SmartFilter
 import com.nobi.nobistream2.core.VideoItem
 import com.nobi.nobistream2.core.VideoQuality
+import com.nobi.nobistream2.data.NobiRepository
 import com.nobi.nobistream2.ui.AppViewModel
 import com.nobi.nobistream2.ui.components.AppTopBar
 import com.nobi.nobistream2.ui.components.CopiesSheet
@@ -159,11 +161,11 @@ fun ChannelScreen(
     // Dedup first, then quality filter — same order as the old app.
     // v1.1.1 item 11: keep the GROUPS so a tap resolves to the group's
     // BEST copy (highest quality) instead of the tapped copy.
-    val groups = remember(allVideos, smartOn) {
+    val episodeGroups = remember(allVideos, smartOn) {
         if (smartOn) SmartFilter.groupEpisodes(allVideos)
         else allVideos.map { EpisodeGroup(null, it, listOf(it)) }
     }
-    val deduped = remember(groups) { groups.map { it.best.copy(hiddenCopies = it.hiddenCount) } }
+    val deduped = remember(episodeGroups) { episodeGroups.map { it.best.copy(hiddenCopies = it.hiddenCount) } }
     // v1.1.1 item 11 (NobiStream 1 v2.6.1): non-episode posts go in
     // their own "Other videos" section instead of the episode list.
     val otherVideos = remember(deduped, smartOn) {
@@ -196,7 +198,7 @@ fun ChannelScreen(
     // (the group's best, unless the quality filter hides it — then the
     // best visible copy). The playlist stays the current filtered list.
     fun playBest(item: VideoItem) {
-        val group = groups.firstOrNull { g ->
+        val group = episodeGroups.firstOrNull { g ->
             g.copies.any { it.messageId == item.messageId && it.chatId == item.chatId }
         }
         val inOther = otherFiltered.any { it.messageId == item.messageId }
@@ -207,7 +209,7 @@ fun ChannelScreen(
         onPlayVideo(best, visibleList, chatId)
     }
     fun groupFor(item: VideoItem): EpisodeGroup? =
-        groups.firstOrNull { g ->
+        episodeGroups.firstOrNull { g ->
             g.copies.any { it.messageId == item.messageId && it.chatId == item.chatId }
         }
     // v1.1.1 item 11: play a copy the user picked explicitly (copies
@@ -219,7 +221,7 @@ fun ChannelScreen(
             onPlayVideo(copy, filtered, chatId)
             return
         }
-        val group = groups.firstOrNull { g ->
+        val group = episodeGroups.firstOrNull { g ->
             g.copies.any { it.messageId == copy.messageId && it.chatId == copy.chatId }
         }
         val bestIdx = group?.let { g -> filtered.indexOfFirst { it.messageId == g.best.messageId } } ?: -1

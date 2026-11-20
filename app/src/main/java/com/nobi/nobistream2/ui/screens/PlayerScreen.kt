@@ -293,7 +293,9 @@ fun PlayerScreen(
                             // the deadline check above fires the 2x.
                             if (event == null) continue
                             val change = event.changes.firstOrNull { it.id == down.id } ?: continue
-                            if (change.changedToUpOrCanceled()) {
+                            // Up or cancel: a non-pressed change is exactly
+                            // that (moves always arrive pressed).
+                            if (!change.pressed) {
                                 when (mode) {
                                     DragMode.Pending -> {
                                         // Tap (or the first tap of a
