@@ -6,6 +6,7 @@ import android.media.AudioManager
 import android.view.View
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -48,6 +49,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -59,6 +61,7 @@ import com.nobi.nobistream2.ui.components.VideoThumb
 import com.nobi.nobistream2.ui.player.PlayerSession
 import com.nobi.nobistream2.ui.theme.ManropeFamily
 import com.nobi.nobistream2.ui.theme.NsColors
+import com.nobi.nobistream2.ui.theme.NsDimens
 import com.nobi.nobistream2.ui.theme.NsIcons
 import com.nobi.nobistream2.ui.theme.SoraFamily
 import kotlinx.coroutines.delay
