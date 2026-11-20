@@ -1,0 +1,13 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- v6: solid theme colour only (#0B1220). The background comes
+         from code, never baked into the foreground artwork (standing
+         icon rule). The old #229ED9 bottom strip is gone — the icon
+         background is one solid colour. -->
+    <path
+        android:fillColor="#0B1220"
+        android:pathData="M0,0 H108 V108 H0 Z" />
+</vector>
