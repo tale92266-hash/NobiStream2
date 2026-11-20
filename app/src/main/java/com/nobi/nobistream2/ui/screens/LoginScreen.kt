@@ -8,7 +8,11 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.BasicTextField
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -39,11 +43,18 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
@@ -53,13 +64,22 @@ import com.nobi.nobistream2.ui.AppViewModel
 import com.nobi.nobistream2.ui.components.PrimaryButton
 import com.nobi.nobistream2.ui.theme.NsColors
 import com.nobi.nobistream2.ui.theme.NsDimens
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeout
+
+/** Telegram login codes are 5 digits. */
+private const val CODE_LENGTH = 5
+
+/** A submit that never answers must surface an error, never spin forever. */
+private const val SUBMIT_TIMEOUT_MS = 30_000L
 
 /**
- * Login: phone (+91) -> Telegram code (6 boxes, auto-advance, paste fills
- * all) -> 2FA password. Wrong code shakes the row gently. No resume
- * dialog anywhere in the app — playback resumes silently (PlayerSession).
+ * Login: phone (+91) -> Telegram code (5 boxes, one field underneath, so
+ * backspace/paste work natively) -> 2FA password. Wrong code shakes the
+ * row gently. No resume dialog anywhere in the app — playback resumes
+ * silently (PlayerSession).
  */
 @OptIn(ExperimentalAnimationApi::class)
 @Composable
@@ -82,9 +102,24 @@ fun LoginScreen(
         label = "shake"
     )
     val hasCreds = remember { repo.credentialsStore.hasCredentials() }
+    val scope = rememberCoroutineScope()
+    val codeFocusRequester = remember { FocusRequester() }
+    val keyboardController = LocalSoftwareKeyboardController.current
 
     LaunchedEffect(authState) {
         if (authState == AuthState.READY) onSignedIn()
+        // A submit's loading flag belongs to its own step. The old code
+        // never cleared it on success, so the flag leaked from the phone
+        // step into the code step and Verify spun forever, disabled.
+        // Every step change clears it, plus stale text and errors.
+        busy = false
+        error = null
+        if (authState != AuthState.NEED_CODE) code = ""
+        if (authState != AuthState.NEED_PASSWORD) password = ""
+        if (authState == AuthState.NEED_CODE) {
+            codeFocusRequester.requestFocus()
+            keyboardController?.show()
+        }
     }
     LaunchedEffect(Unit) {
         vm.ensureStarted()
@@ -158,16 +193,21 @@ fun LoginScreen(
                         PrimaryButton(
                             text = "Continue",
                             onClick = {
+                                if (busy) return@PrimaryButton
                                 busy = true
                                 error = null
-                                vm.repository.let { r ->
-                                    // Fire and observe authState transitions.
-                                    kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Main).launch {
-                                        runCatching { r.sendPhoneNumber("+91$phone") }
-                                            .onFailure {
-                                                error = "Sign-in failed. Check the number and try again."
-                                                busy = false
-                                            }
+                                scope.launch {
+                                    runCatching {
+                                        withTimeout(SUBMIT_TIMEOUT_MS) {
+                                            repo.sendPhoneNumber("+91$phone")
+                                        }
+                                    }.onFailure {
+                                        error = if (it is TimeoutCancellationException) {
+                                            "Timed out. Check your connection and try again."
+                                        } else {
+                                            "Sign-in failed. Check the number and try again."
+                                        }
+                                        busy = false
                                     }
                                 }
                             },
@@ -179,31 +219,27 @@ fun LoginScreen(
                 }
                 AuthState.NEED_CODE -> {
                     Column {
-                        // 6-box OTP: one field, auto-advance is native to the
-                        // keyboard; paste fills all boxes at once via onValueChange.
-                        Row(
+                        Text(
+                            "Enter the 5-digit code sent to +91 $phone",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = NsColors.TextSecondary
+                        )
+                        Spacer(Modifier.height(16.dp))
+                        // ONE editable field under 5 drawn boxes. The old
+                        // code used 6 separate fields with no focus handling:
+                        // backspace on an empty box fired no value change at
+                        // all, focus never moved, paste kept only its last
+                        // digit, and Verify needed 6 digits that Telegram
+                        // never sends. One field makes backspace, paste and
+                        // the keyboard behave natively on a real device.
+                        FiveDigitCodeField(
+                            code = code,
+                            onCodeChange = { code = it },
+                            focusRequester = codeFocusRequester,
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .graphicsLayer { translationX = shake * 8f },
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            repeat(6) { i ->
-                                OutlinedTextField(
-                                    value = code.getOrNull(i)?.toString() ?: "",
-                                    onValueChange = { v ->
-                                        if (v.length == 6) { code = v.filter { it.isDigit() }.take(6) }
-                                        else if (v.isNotEmpty() && v.last().isDigit()) {
-                                            code = (code + v.last()).take(6)
-                                        } else if (v.isEmpty() && code.length > i) {
-                                            code = code.dropLast(1)
-                                        }
-                                    },
-                                    singleLine = true,
-                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                                    modifier = Modifier.weight(1f)
-                                )
-                            }
-                        }
+                                .graphicsLayer { translationX = shake * 8f }
+                        )
                         if (error != null) {
                             Spacer(Modifier.height(8.dp))
                             Text(error!!, style = MaterialTheme.typography.bodyMedium, color = NsColors.Error)
@@ -212,18 +248,28 @@ fun LoginScreen(
                         PrimaryButton(
                             text = "Verify",
                             onClick = {
+                                if (code.length != CODE_LENGTH || busy) return@PrimaryButton
                                 busy = true
-                                kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Main).launch {
-                                    runCatching { repo.sendCode(code) }
-                                        .onFailure {
-                                            error = "Wrong code, try again"
-                                            shakeTrigger++
-                                            busy = false
-                                            delay(300)
+                                error = null
+                                scope.launch {
+                                    runCatching {
+                                        withTimeout(SUBMIT_TIMEOUT_MS) { repo.sendCode(code) }
+                                    }.onFailure {
+                                        error = if (it is TimeoutCancellationException) {
+                                            "Timed out. Check your connection and try again."
+                                        } else {
+                                            "Wrong code, try again"
                                         }
+                                        shakeTrigger++
+                                        busy = false
+                                        delay(400)
+                                        shakeTrigger = 0
+                                    }
+                                    // On success the auth-state change clears
+                                    // busy via the LaunchedEffect above.
                                 }
                             },
-                            enabled = code.length == 6,
+                            enabled = code.length == CODE_LENGTH,
                             loading = busy,
                             modifier = Modifier.fillMaxWidth()
                         )
@@ -258,13 +304,22 @@ fun LoginScreen(
                         PrimaryButton(
                             text = "Sign in",
                             onClick = {
+                                if (busy) return@PrimaryButton
                                 busy = true
-                                kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Main).launch {
-                                    runCatching { repo.sendPassword(password) }
-                                        .onFailure {
-                                            error = "Wrong password, try again"
-                                            busy = false
+                                error = null
+                                scope.launch {
+                                    runCatching {
+                                        withTimeout(SUBMIT_TIMEOUT_MS) {
+                                            repo.sendPassword(password)
                                         }
+                                    }.onFailure {
+                                        error = if (it is TimeoutCancellationException) {
+                                            "Timed out. Check your connection and try again."
+                                        } else {
+                                            "Wrong password, try again"
+                                        }
+                                        busy = false
+                                    }
                                 }
                             },
                             enabled = password.isNotEmpty(),
@@ -285,4 +340,81 @@ fun LoginScreen(
             Text("Settings")
         }
     }
+}
+
+/**
+ * 5-digit code entry: one [BasicTextField] holding the whole code, with 5
+ * boxes drawn as its decoration. The single field is what makes the
+ * behaviour correct on a real device:
+ * - Backspace deletes the last digit natively, including when the caret
+ *   sits in an "empty" box (separate per-box fields never even receive
+ *   that key event, so backspace did nothing).
+ * - Typing a digit fills the next box visually; pasting a 5-digit code
+ *   lands in the one field and fills all boxes at once.
+ * - The editable field itself is invisible (transparent text, no cursor);
+ *   the boxes are its visual representation. The next empty box gets the
+ *   primary border plus a caret bar so the user always sees where they are.
+ */
+@Composable
+private fun FiveDigitCodeField(
+    code: String,
+    onCodeChange: (String) -> Unit,
+    focusRequester: FocusRequester,
+    modifier: Modifier = Modifier
+) {
+    BasicTextField(
+        value = code,
+        onValueChange = { onCodeChange(it.filter { c -> c.isDigit() }.take(CODE_LENGTH)) },
+        modifier = modifier
+            .fillMaxWidth()
+            .focusRequester(focusRequester),
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+        singleLine = true,
+        textStyle = TextStyle(color = Color.Transparent),
+        cursorBrush = SolidColor(Color.Transparent),
+        decorationBox = { innerTextField ->
+            Box {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    repeat(CODE_LENGTH) { i ->
+                        val digit = code.getOrNull(i)?.toString() ?: ""
+                        val isNext = i == code.length
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(NsDimens.InputHeight)
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(NsColors.SurfaceVariant)
+                                .border(
+                                    width = if (isNext) 2.dp else 1.dp,
+                                    color = if (isNext) NsColors.Primary else NsColors.Outline,
+                                    shape = RoundedCornerShape(12.dp)
+                                ),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            if (digit.isNotEmpty()) {
+                                Text(
+                                    digit,
+                                    style = MaterialTheme.typography.titleLarge,
+                                    color = NsColors.TextPrimary
+                                )
+                            } else if (isNext) {
+                                Box(
+                                    Modifier
+                                        .width(2.dp)
+                                        .height(24.dp)
+                                        .background(NsColors.Primary)
+                                )
+                            }
+                        }
+                    }
+                }
+                // The real editable field: zero-size and invisible, but
+                // still the focused, IME-connected field.
+                Box(Modifier.size(0.dp)) { innerTextField() }
+            }
+        }
+    )
 }

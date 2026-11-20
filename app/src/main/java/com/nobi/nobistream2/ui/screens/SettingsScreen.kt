@@ -174,7 +174,7 @@ fun SettingsScreen(vm: AppViewModel, onBack: () -> Unit) {
             SettingsRow("Theme", "Dark (only theme)")
 
             SettingsSection("About")
-            SettingsRow("Version", "1.0.0 (1)")
+            SettingsRow("Version", "1.0.1 (2)")
             Text(
                 "NobiStream 2. Videos stream from your own Telegram account with TDLib (MTProto). No videos are uploaded anywhere. Thanks and all credit goes to Telegram / TDLib and their developers.",
                 style = MaterialTheme.typography.bodySmall,
