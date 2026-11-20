@@ -122,7 +122,7 @@ class TdLibGateway(context: Context) : TelegramGateway {
             "en",
             "Android",
             Build.VERSION.RELEASE ?: "13",
-            "1.0.1"
+            "1.1.0"
         )
         client?.send(
             params,

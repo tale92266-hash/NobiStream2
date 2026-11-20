@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -15,30 +16,16 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.Group
-import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FloatingActionButton
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
-import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -49,28 +36,42 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.nobi.nobistream2.core.FormatUtils
 import com.nobi.nobistream2.core.GroupItem
 import com.nobi.nobistream2.core.VideoItem
 import com.nobi.nobistream2.ui.AppViewModel
+import com.nobi.nobistream2.ui.components.AddGroupSheet
 import com.nobi.nobistream2.ui.components.AppTopBar
 import com.nobi.nobistream2.ui.components.ConfirmDialog
 import com.nobi.nobistream2.ui.components.EmptyState
 import com.nobi.nobistream2.ui.components.GroupCard
+import com.nobi.nobistream2.ui.components.MiniVideoCard
+import com.nobi.nobistream2.ui.components.NsTopBar
 import com.nobi.nobistream2.ui.components.PrimaryButton
 import com.nobi.nobistream2.ui.components.SectionHeader
 import com.nobi.nobistream2.ui.components.SkeletonRow
 import com.nobi.nobistream2.ui.components.VideoThumb
+import com.nobi.nobistream2.ui.theme.ManropeFamily
 import com.nobi.nobistream2.ui.theme.NsColors
 import com.nobi.nobistream2.ui.theme.NsDimens
+import com.nobi.nobistream2.ui.theme.NsIcons
+import com.nobi.nobistream2.ui.theme.SoraFamily
+import androidx.compose.material3.Icon
+import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.fillMaxHeight
 
 /**
- * Home (Appendix A3): one vertically scrolling lazy list — no nested
- * vertical scroll containers. Continue Watching (240dp cards) +
- * Recently Added carousel + My Groups + FAB above the bottom nav.
+ * Home (HTML redesign v1.1.0): paste chip, Hero Spotlight with the REAL
+ * Continue Watching item, Your Groups, Recently Added 2-column rail,
+ * HTML empty state with the 3 Hinglish steps when no groups exist.
  */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HomeScreen(
     vm: AppViewModel,
@@ -79,7 +80,8 @@ fun HomeScreen(
     onOpenSearch: () -> Unit,
     onOpenSettings: () -> Unit,
     onPlayVideo: (VideoItem, List<VideoItem>, Long, Boolean) -> Unit,
-    onSeeAllContinue: () -> Unit
+    onSeeAllContinue: () -> Unit,
+    onSeeAllLibrary: () -> Unit = {}
 ) {
     val groups by vm.groups.collectAsState()
     val continueWatching by vm.continueWatching.collectAsState()
@@ -99,7 +101,10 @@ fun HomeScreen(
         }
     }
 
-    Box(modifier = Modifier.fillMaxSize()) {
+    val hero = continueWatching.firstOrNull()
+    val heroGroup = hero?.let { v -> groups.firstOrNull { it.chatId == v.chatId } }
+
+    Box(modifier = Modifier.fillMaxSize().background(NsColors.Background)) {
         PullToRefreshBox(
             isRefreshing = loading,
             onRefresh = { vm.refreshGroups() },
@@ -107,108 +112,120 @@ fun HomeScreen(
         ) {
             LazyColumn(
                 modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(bottom = 96.dp)
+                contentPadding = PaddingValues(
+                    start = NsDimens.ContentPadding,
+                    end = NsDimens.ContentPadding,
+                    top = NsDimens.ScreenTopPadding,
+                    bottom = 96.dp
+                )
             ) {
                 item {
-                    AppTopBar(
-                        title = "NobiStream 2",
-                        actions = {
-                            IconButton(onClick = onOpenSearch, modifier = Modifier.size(48.dp)) {
-                                Icon(Icons.Filled.Search, contentDescription = "Search videos", tint = NsColors.TextPrimary)
-                            }
-                            IconButton(onClick = { vm.refreshGroups() }, modifier = Modifier.size(48.dp)) {
-                                Icon(Icons.Filled.Refresh, contentDescription = "Refresh groups", tint = NsColors.TextPrimary)
-                            }
-                            IconButton(onClick = onOpenSettings, modifier = Modifier.size(48.dp)) {
-                                Icon(Icons.Filled.Settings, contentDescription = "Settings", tint = NsColors.TextPrimary)
-                            }
-                        }
+                    NsTopBar(
+                        onAdd = { showAddSheet = true },
+                        onRefresh = { vm.refreshGroups() }
                     )
                 }
-                if (loading && groups.isEmpty()) {
-                    items(3) { SkeletonRow(modifier = Modifier.padding(horizontal = NsDimens.ContentPadding)) }
-                }
-                if (continueWatching.isNotEmpty()) {
+                if (groups.isEmpty() && !loading) {
+                    item { HomeEmptyState(onAdd = { showAddSheet = true }) }
+                } else {
+                    // Paste chip.
                     item {
-                        SectionHeader(title = "Continue Watching") {
-                            TextButton(onClick = onSeeAllContinue) { Text("See all") }
-                        }
-                        LazyRow(
-                            contentPadding = PaddingValues(horizontal = NsDimens.ContentPadding),
-                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(46.dp)
+                                .clip(RoundedCornerShape(14.dp))
+                                .background(NsColors.Primary.copy(alpha = 0.09f))
+                                .border(1.dp, NsColors.AccentBright.copy(alpha = 0.45f), RoundedCornerShape(14.dp))
+                                .clickable { showAddSheet = true }
+                                .padding(horizontal = 14.dp),
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            items(continueWatching, key = { it.chatId to it.messageId }) { video ->
-                                Column(
-                                    modifier = Modifier.width(NsDimens.VideoCardWidth)
-                                        .clickable { onPlayVideo(video, continueWatching, video.chatId, true) }
-                                ) {
-                                    VideoThumb(vm.repository, video, modifier = Modifier.fillMaxWidth())
-                                    Spacer(Modifier.height(6.dp))
-                                    Text(video.title, style = MaterialTheme.typography.titleSmall, color = NsColors.TextPrimary, maxLines = 2)
+                            Icon(NsIcons.Link, contentDescription = null, tint = NsColors.AccentBright, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(10.dp))
+                            Text(
+                                "Paste a Telegram link",
+                                fontFamily = ManropeFamily,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 13.5.sp,
+                                color = NsColors.AccentBright
+                            )
+                        }
+                        Spacer(Modifier.height(18.dp))
+                    }
+                    // Hero Spotlight — real Continue Watching item.
+                    if (hero != null) {
+                        item {
+                            HeroSpotlight(
+                                vm = vm,
+                                video = hero,
+                                groupTitle = heroGroup?.title,
+                                onResume = { onPlayVideo(hero, continueWatching, hero.chatId, true) }
+                            )
+                        }
+                    }
+                    if (loading && groups.isEmpty()) {
+                        items(3) { SkeletonRow() }
+                    }
+                    item {
+                        SectionHeader(
+                            title = "Your Groups",
+                            count = "${groups.size} ${if (groups.size == 1) "group" else "groups"}"
+                        )
+                    }
+                    items(groups, key = { it.chatId }) { group ->
+                        GroupCard(
+                            group = group,
+                            onClick = { onOpenGroup(group.chatId) },
+                            onLongClick = { onOpenGroupDetails(group.chatId) }
+                        )
+                        Spacer(Modifier.height(8.dp))
+                    }
+                    if (recentlyAdded.isNotEmpty() || recentLoading) {
+                        item {
+                            SectionHeader(title = "Recently Added") {
+                                TextButton(onClick = onSeeAllLibrary) {
                                     Text(
-                                        "${FormatUtils.formatResumePosition(video.progressSec, video.durationSec)} left",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = NsColors.TextSecondary
-                                    )
-                                    LinearProgressIndicator(
-                                        progress = { video.progressFraction },
-                                        modifier = Modifier.fillMaxWidth().height(3.dp),
-                                        color = NsColors.Primary,
-                                        trackColor = NsColors.Outline
+                                        "See all",
+                                        fontFamily = ManropeFamily,
+                                        fontWeight = FontWeight.ExtraBold,
+                                        fontSize = 13.sp,
+                                        color = NsColors.AccentBright
                                     )
                                 }
                             }
                         }
-                        Spacer(Modifier.height(NsDimens.SectionSpacing))
-                    }
-                }
-                if (recentlyAdded.isNotEmpty() || recentLoading) {
-                    item {
-                        SectionHeader(title = "Recently Added")
-                        LazyRow(
-                            contentPadding = PaddingValues(horizontal = NsDimens.ContentPadding),
-                            horizontalArrangement = Arrangement.spacedBy(12.dp)
-                        ) {
-                            if (recentLoading) {
-                                items(3) {
-                                    Box(modifier = Modifier.width(NsDimens.RecentCardWidth).height(140.dp).clip(RoundedCornerShape(16.dp)).background(NsColors.Skeleton))
-                                }
-                            } else {
-                                items(recentlyAdded, key = { it.chatId to it.messageId }) { video ->
-                                    Column(
-                                        modifier = Modifier.width(NsDimens.RecentCardWidth)
-                                            .clickable { onPlayVideo(video, recentlyAdded, video.chatId, false) }
-                                    ) {
-                                        VideoThumb(vm.repository, video, modifier = Modifier.fillMaxWidth())
-                                        Spacer(Modifier.height(6.dp))
-                                        Text(video.title, style = MaterialTheme.typography.titleSmall, color = NsColors.TextPrimary, maxLines = 2)
-                                        Text(video.quality.label, style = MaterialTheme.typography.bodySmall, color = NsColors.TextSecondary)
+                        if (recentLoading) {
+                            item {
+                                Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                                    repeat(2) {
+                                        Box(
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .aspectRatio(16f / 9f)
+                                                .clip(RoundedCornerShape(12.dp))
+                                                .background(NsColors.Skeleton)
+                                        )
                                     }
                                 }
                             }
-                        }
-                        Spacer(Modifier.height(NsDimens.SectionSpacing))
-                    }
-                }
-                item { SectionHeader(title = "My Groups") }
-                if (groups.isEmpty() && !loading) {
-                    item {
-                        EmptyState(
-                            icon = Icons.Filled.Group,
-                            title = "No groups added yet",
-                            subtitle = "Paste a Telegram group or channel link to see all its videos in one place.",
-                            buttonText = "Add Group / Channel",
-                            onButtonClick = { showAddSheet = true }
-                        )
-                    }
-                } else {
-                    items(groups, key = { it.chatId }) { group ->
-                        Box(modifier = Modifier.padding(horizontal = NsDimens.ContentPadding)) {
-                            GroupCard(
-                                group = group,
-                                onClick = { onOpenGroup(group.chatId) },
-                                onLongClick = { onOpenGroupDetails(group.chatId) }
-                            )
+                        } else {
+                            items(recentlyAdded.chunked(2)) { row ->
+                                Row(
+                                    modifier = Modifier.fillMaxWidth().padding(bottom = 14.dp),
+                                    horizontalArrangement = Arrangement.spacedBy(14.dp)
+                                ) {
+                                    row.forEach { video ->
+                                        MiniVideoCard(
+                                            repo = vm.repository,
+                                            item = video,
+                                            onClick = { onPlayVideo(video, recentlyAdded, video.chatId, false) },
+                                            modifier = Modifier.weight(1f)
+                                        )
+                                    }
+                                    if (row.size == 1) Spacer(Modifier.weight(1f))
+                                }
+                            }
                         }
                     }
                 }
@@ -218,21 +235,11 @@ fun HomeScreen(
                             error!!,
                             style = MaterialTheme.typography.bodyMedium,
                             color = NsColors.Error,
-                            modifier = Modifier.padding(NsDimens.ContentPadding)
+                            modifier = Modifier.padding(vertical = 8.dp)
                         )
                     }
                 }
             }
-        }
-        FloatingActionButton(
-            onClick = { showAddSheet = true },
-            modifier = Modifier
-                .align(Alignment.BottomEnd)
-                .padding(end = 16.dp, bottom = 96.dp),
-            containerColor = NsColors.Primary,
-            contentColor = androidx.compose.ui.graphics.Color.White
-        ) {
-            Icon(Icons.Filled.Add, contentDescription = "Add Group / Channel")
         }
     }
 
@@ -251,64 +258,176 @@ fun HomeScreen(
     }
 }
 
-/** Appendix A4: Add Group bottom sheet — validate immediately, no green success before TDLib confirms. */
-@OptIn(ExperimentalMaterial3Api::class)
+/** HTML Hero Spotlight: 16/10.5 image, gradient shade, tag, progress, Resume. */
 @Composable
-fun AddGroupSheet(vm: AppViewModel, onDismiss: () -> Unit) {
-    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    var link by remember { mutableStateOf("") }
-    var status by remember { mutableStateOf<String?>(null) }
-    var busy by remember { mutableStateOf(false) }
-    val valid = remember(link) {
-        val t = link.trim()
-        t.startsWith("https://t.me/") || t.startsWith("t.me/") || t.startsWith("@") || t.matches(Regex("[A-Za-z0-9_]{5,}"))
-    }
-    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
-        Column(modifier = Modifier.fillMaxWidth().padding(20.dp)) {
-            Text("Add Group / Channel", style = MaterialTheme.typography.titleLarge, color = NsColors.TextPrimary)
-            Spacer(Modifier.height(8.dp))
-            Text(
-                "Public groups and channels you can already read. Private links need an invite you have accepted.",
-                style = MaterialTheme.typography.bodyMedium,
-                color = NsColors.TextSecondary
-            )
-            Spacer(Modifier.height(16.dp))
-            OutlinedTextField(
-                value = link,
-                onValueChange = {
-                    link = it
-                    status = when {
-                        it.isBlank() -> null
-                        valid -> "Link looks valid — tap Add to confirm with Telegram."
-                        else -> "That doesn't look like a Telegram link. Paste a t.me link or a @username."
-                    }
-                },
-                label = { Text("Telegram link") },
-                placeholder = { Text("https://t.me/channel_name") },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth().height(NsDimens.InputHeight)
-            )
-            if (status != null) {
-                Spacer(Modifier.height(8.dp))
-                Text(status!!, style = MaterialTheme.typography.bodyMedium, color = if (valid) NsColors.Success else NsColors.Error)
-            }
-            Spacer(Modifier.height(16.dp))
-            PrimaryButton(
-                text = "Add",
-                onClick = {
-                    busy = true
-                    status = null
-                    vm.addGroup(
-                        link,
-                        onAdded = { onDismiss() },
-                        onError = { message -> status = message; busy = false }
+private fun HeroSpotlight(
+    vm: AppViewModel,
+    video: VideoItem,
+    groupTitle: String?,
+    onResume: () -> Unit
+) {
+    val remainingSec = (video.durationSec - video.progressSec.toInt()).coerceAtLeast(0)
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(22.dp))
+            .background(NsColors.Surface)
+            .clickable(onClick = onResume)
+    ) {
+        Box(modifier = Modifier.fillMaxWidth().aspectRatio(16f / 10.5f)) {
+            VideoThumb(vm.repository, video, modifier = Modifier.fillMaxSize(), showBadges = false)
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(
+                        Brush.verticalGradient(
+                            listOf(
+                                Color(0x0F060B14),
+                                Color(0xE0060B14),
+                                Color(0xF7060B14)
+                            )
+                        )
                     )
-                },
-                enabled = valid && !busy,
-                loading = busy,
-                modifier = Modifier.fillMaxWidth()
             )
-            Spacer(Modifier.height(16.dp))
+        }
+        Column(
+            modifier = Modifier
+                .align(Alignment.BottomStart)
+                .fillMaxWidth()
+                .padding(start = 18.dp, end = 18.dp, bottom = 18.dp, top = 16.dp)
+        ) {
+            Row(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(999.dp))
+                    .background(Color(0x8C060B14))
+                    .border(1.dp, Color.White.copy(alpha = 0.18f), RoundedCornerShape(999.dp))
+                    .padding(horizontal = 10.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Box(modifier = Modifier.size(6.dp).clip(androidx.compose.foundation.shape.CircleShape).background(NsColors.AccentBright))
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    "CONTINUE WATCHING",
+                    fontFamily = ManropeFamily,
+                    fontWeight = FontWeight.ExtraBold,
+                    fontSize = 10.5.sp,
+                    color = Color.White,
+                    letterSpacing = 0.14.sp
+                )
+            }
+            Spacer(Modifier.height(10.dp))
+            Text(
+                video.title,
+                fontFamily = SoraFamily,
+                fontWeight = FontWeight.ExtraBold,
+                fontSize = 24.sp,
+                color = Color.White,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+            if (groupTitle != null) {
+                Text(
+                    groupTitle,
+                    fontFamily = ManropeFamily,
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 13.5.sp,
+                    color = NsColors.TextOnHero,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(top = 3.dp)
+                )
+            }
+            Spacer(Modifier.height(14.dp))
+            LinearProgressIndicator(
+                progress = { video.progressFraction },
+                modifier = Modifier.fillMaxWidth().height(5.dp).clip(RoundedCornerShape(999.dp)),
+                color = NsColors.AccentBright,
+                trackColor = Color.White.copy(alpha = 0.25f)
+            )
+            Spacer(Modifier.height(12.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Row(
+                    modifier = Modifier
+                        .height(46.dp)
+                        .clip(RoundedCornerShape(999.dp))
+                        .background(NsColors.Primary)
+                        .clickable(onClick = onResume)
+                        .padding(horizontal = 20.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(NsIcons.Play, contentDescription = null, tint = Color.White, modifier = Modifier.size(15.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("Resume", fontFamily = ManropeFamily, fontWeight = FontWeight.ExtraBold, fontSize = 14.5.sp, color = Color.White)
+                }
+                Spacer(Modifier.width(12.dp))
+                Text(
+                    buildAnnotatedString {
+                        withStyle(androidx.compose.ui.text.SpanStyle(color = Color.White, fontWeight = FontWeight.Bold)) {
+                            append(FormatUtils.formatDuration(remainingSec))
+                        }
+                        append(" left · ${video.quality.label}")
+                    },
+                    fontFamily = ManropeFamily,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 13.sp,
+                    color = NsColors.TextOnHero
+                )
+            }
+        }
+    }
+}
+
+/** HTML empty state: circle art, message, full-width button, 3 Hinglish steps (exact HTML text). */
+@Composable
+private fun HomeEmptyState(onAdd: () -> Unit) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = 6.dp, end = 6.dp, top = 64.dp, bottom = 30.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        EmptyState(
+            icon = NsIcons.PlayInRect,
+            title = "No groups added yet",
+            subtitle = "Add a Telegram group or channel and all its videos will appear here — ready to stream."
+        )
+        PrimaryButton(text = "Add Group / Channel", onClick = onAdd, modifier = Modifier.fillMaxWidth())
+        Column(
+            modifier = Modifier.padding(top = 26.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            listOf(
+                "Telegram me group/channel kholo aur uska link copy karo",
+                "Yahan paste karo — videos apne aap list me aa jayenge",
+                "Tap karke stream karo, jahan chhoda wahi se resume hoga"
+            ).forEachIndexed { i, step ->
+                Row(verticalAlignment = Alignment.Top) {
+                    Box(
+                        modifier = Modifier
+                            .size(22.dp)
+                            .clip(androidx.compose.foundation.shape.CircleShape)
+                            .background(NsColors.Primary.copy(alpha = 0.16f)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            "${i + 1}",
+                            fontFamily = ManropeFamily,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 11.5.sp,
+                            color = NsColors.AccentBright
+                        )
+                    }
+                    Spacer(Modifier.width(11.dp))
+                    Text(
+                        step,
+                        fontFamily = ManropeFamily,
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 13.sp,
+                        color = NsColors.TextSecondary,
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+            }
         }
     }
 }
@@ -329,7 +448,7 @@ fun GroupDetailsScreen(
     LaunchedEffect(chatId) {
         videos = runCatching { vm.repository.loadVideos(chatId, 0L, 50) }.getOrNull()?.videos ?: emptyList()
     }
-    Column(modifier = Modifier.fillMaxSize()) {
+    Column(modifier = Modifier.fillMaxSize().background(NsColors.Background)) {
         AppTopBar(title = group?.title ?: "Group", subtitle = group?.let { "${it.videoCount} videos" }, onBack = onBack)
         if (group == null) {
             EmptyState(icon = Icons.Filled.Group, title = "Group not found", subtitle = "This group may have been removed.")
@@ -390,7 +509,7 @@ fun ContinueAllScreen(
     onPlayVideo: (VideoItem, List<VideoItem>, Long, Boolean) -> Unit
 ) {
     val items by vm.repository.observeContinueWatchingAll().collectAsState(initial = emptyList())
-    Column(modifier = Modifier.fillMaxSize()) {
+    Column(modifier = Modifier.fillMaxSize().background(NsColors.Background)) {
         AppTopBar(title = "Continue Watching", onBack = onBack)
         if (items.isEmpty()) {
             EmptyState(
