@@ -50,6 +50,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Slider
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
@@ -103,7 +104,7 @@ fun PlayerScreen(
     val subsEnabled by session.subtitlesEnabled.collectAsState()
     val sleepLeft by session.sleepMinutesLeft.collectAsState()
     val index by session.playlistIndex.collectAsState()
-    val size by session.playlistSize.collectAsState()
+    val playlistSize by session.playlistSize.collectAsState()
 
     var controlsVisible by remember { mutableStateOf(true) }
     var locked by remember { mutableStateOf(false) }
@@ -231,8 +232,8 @@ fun PlayerScreen(
                         maxLines = 1,
                         modifier = Modifier.weight(1f)
                     )
-                    if (size > 1) {
-                        Text("${index + 1} / $size", color = Color.White, style = MaterialTheme.typography.bodySmall)
+                    if (playlistSize > 1) {
+                        Text("${index + 1} / $playlistSize", color = Color.White, style = MaterialTheme.typography.bodySmall)
                     }
                 }
                 // Centre controls.

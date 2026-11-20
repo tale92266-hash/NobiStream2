@@ -34,6 +34,7 @@ import androidx.compose.ui.unit.dp
 import com.nobi.nobistream2.BuildConfig
 import com.nobi.nobistream2.ui.AppViewModel
 import com.nobi.nobistream2.ui.components.AppTopBar
+import kotlinx.coroutines.launch
 import com.nobi.nobistream2.ui.components.ConfirmDialog
 import com.nobi.nobistream2.ui.components.PrimaryButton
 import com.nobi.nobistream2.ui.theme.NsColors

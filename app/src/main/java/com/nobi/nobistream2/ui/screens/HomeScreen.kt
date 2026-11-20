@@ -1,5 +1,6 @@
 package com.nobi.nobistream2.ui.screens
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -368,14 +369,16 @@ fun GroupDetailsScreen(
         }
     }
     if (showRemove) {
-        ConfirmDialog(
-            title = "Remove this group?",
-            body = "Remove ${group.title} from NobiStream 2? Its videos stay on Telegram.",
-            confirmText = "Remove",
-            destructive = true,
-            onConfirm = { vm.removeGroup(group); showRemove = false; onRemove() },
-            onDismiss = { showRemove = false }
-        )
+        group?.let { g ->
+            ConfirmDialog(
+                title = "Remove this group?",
+                body = "Remove ${g.title} from NobiStream 2? Its videos stay on Telegram.",
+                confirmText = "Remove",
+                destructive = true,
+                onConfirm = { vm.removeGroup(g); showRemove = false; onRemove() },
+                onDismiss = { showRemove = false }
+            )
+        }
     }
 }
 

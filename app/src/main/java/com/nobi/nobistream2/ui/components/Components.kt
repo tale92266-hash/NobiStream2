@@ -24,7 +24,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.automirrored.filled.ChevronRight
+import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.AlertDialog
@@ -316,7 +316,7 @@ fun GroupCard(
                 overflow = TextOverflow.Ellipsis
             )
         }
-        Icon(Icons.AutoMirrored.Filled.ChevronRight, contentDescription = null, tint = NsColors.TextSecondary, modifier = Modifier.size(NsDimens.SmallIconSize))
+        Icon(Icons.Filled.ChevronRight, contentDescription = null, tint = NsColors.TextSecondary, modifier = Modifier.size(NsDimens.SmallIconSize))
     }
 }
 

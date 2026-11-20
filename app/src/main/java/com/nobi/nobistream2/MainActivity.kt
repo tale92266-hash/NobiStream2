@@ -72,7 +72,7 @@ class MainActivity : ComponentActivity() {
         setContent {
             NobiStream2Theme {
                 NobiStream2App(
-                    viewModel = viewModel(
+                    vm = viewModel(
                         factory = object : ViewModelProvider.Factory {
                             @Suppress("UNCHECKED_CAST")
                             override fun <T : ViewModel> create(modelClass: Class<T>): T =

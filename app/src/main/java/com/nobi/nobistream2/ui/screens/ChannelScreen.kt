@@ -64,6 +64,7 @@ import com.nobi.nobistream2.ui.components.ErrorState
 import com.nobi.nobistream2.ui.components.QualityChip
 import com.nobi.nobistream2.ui.components.SkeletonRow
 import com.nobi.nobistream2.ui.components.VideoCard
+import kotlinx.coroutines.launch
 import com.nobi.nobistream2.ui.components.VideoThumb
 import com.nobi.nobistream2.ui.theme.NsColors
 import com.nobi.nobistream2.ui.theme.NsDimens
@@ -82,6 +83,7 @@ fun ChannelScreen(
     onPlayVideo: (VideoItem, List<VideoItem>, Long) -> Unit,
     onOpenSearch: () -> Unit
 ) {
+    val context = androidx.compose.ui.platform.LocalContext.current
     val groups by vm.groups.collectAsState()
     val group = groups.firstOrNull { it.chatId == chatId }
     val sortMode by vm.repository.settingsStore.sortMode.collectAsState(initial = "Newest")
@@ -262,7 +264,7 @@ fun ChannelScreen(
             else -> {
                 LazyColumn(
                     modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(horizontal = NsDimens.ContentPadding, bottom = 16.dp)
+                    contentPadding = PaddingValues(start = NsDimens.ContentPadding, end = NsDimens.ContentPadding, top = 8.dp, bottom = 16.dp)
                 ) {
                     items(filtered, key = { it.chatId to it.messageId }) { video ->
                         VideoCard(
@@ -395,6 +397,7 @@ fun VideoActionSheet(
     onDismiss: () -> Unit,
     onWatchLaterToggled: () -> Unit
 ) {
+    val context = androidx.compose.ui.platform.LocalContext.current
     var isSaved by remember { mutableStateOf(false) }
     LaunchedEffect(item) { isSaved = vm.isWatchLater(item) }
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState()) {
@@ -427,7 +430,7 @@ fun VideoActionSheet(
                     type = "text/plain"
                     putExtra(android.content.Intent.EXTRA_TEXT, text)
                 }
-                androidx.compose.ui.platform.LocalContext.current.startActivity(
+                context.startActivity(
                     android.content.Intent.createChooser(intent, "Share video")
                 )
                 onDismiss()
