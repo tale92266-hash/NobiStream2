@@ -275,7 +275,7 @@ fun SettingsScreen(vm: AppViewModel, onBack: () -> Unit) {
                 icon = NsIcons.Play,
                 title = "NobiStream",
                 desc = "Videos stream from your own Telegram account with TDLib (MTProto). No videos are uploaded anywhere.",
-                value = "1.1.2 (5)",
+                value = "1.1.3 (6)",
                 valueColor = NsColors.TextSecondary,
                 clickable = false,
                 onClick = {}

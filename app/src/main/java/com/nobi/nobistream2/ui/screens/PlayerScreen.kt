@@ -30,6 +30,8 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
@@ -89,10 +91,12 @@ import kotlin.math.roundToInt
 /**
  * Player (HTML redesign v1.1.0 — NobiStream 2 player): black bg, bottom
  * nav hidden, 16/9 video, X back + title top bar (NO Cast button — no
- * Cast backend exists), centre skip −10s / big 68dp play / skip +10s,
- * custom seek (track 4.5dp, buffered, accent fill, 14dp dot), time row,
- * control row Previous / CC / quality badge / lock / fullscreen, meta
- * below (title, sub, hold-tip chip, Up Next card). Engine unchanged
+ * Cast backend exists), centre controls — skip −10s / previous episode /
+ * big 68dp play / next episode / skip +10s (v1.1.3: prev/next moved here
+ * from the bottom row, Sam's order), custom seek (track 4.5dp, buffered,
+ * accent fill, 14dp dot), time row, control row CC / quality badge /
+ * lock / fullscreen, meta below (title, sub, hold-tip chip, Up Next
+ * horizontal rail in portrait, YouTube-style). Engine unchanged
  * (Media3 + FFmpeg, resume, buffering, subtitles, speed, PiP session).
  * Hold-to-2x is REAL: long-press the video, release to restore speed.
  * Lock hides centre + bottom controls + title; unlock via the lock
@@ -229,6 +233,12 @@ fun PlayerScreen(
     // v1.1.1 item 12: Up Next = the next 2-3 episodes, never fake rows.
     val upNext = remember(index, playlistSize) {
         (1..3).mapNotNull { session.playlist.getOrNull(index + it) }
+    }
+    // v1.1.3 item 2: the portrait Up Next RAIL scrolls horizontally
+    // (YouTube-style) — the next 10 episodes, so there is something
+    // to swipe through. Fewer remaining = fewer cards, never fake rows.
+    val upNextRail = remember(index, playlistSize) {
+        (1..10).mapNotNull { session.playlist.getOrNull(index + it) }
     }
     val nextItem = upNext.firstOrNull()
     val durationSec = (durationMs / 1000).toInt()
@@ -560,14 +570,19 @@ fun PlayerScreen(
                     }
                 }
             }
-            // Centre controls. v1.1.2 item 3: shifted up just enough
+            // Centre controls. v1.1.3 item 1: prev/next episode sit
+            // HERE, flanking play/pause (YouTube-style) — Sam's order,
+            // NOT in the bottom row. Layout: skip 52dp + 16dp gap +
+            // prev 48dp + 16dp + play 68dp + 16dp + next 48dp + 16dp +
+            // skip 52dp = 332dp total, fits Sam's ~393dp phone with
+            // room to spare. v1.1.2 item 3: shifted up just enough
             // that the 68dp pause circle never touches the seekbar
             // (portrait 16:9); fullscreen needs no shift.
             if (controlsVisible && !locked) {
                 Row(
                     modifier = Modifier.align(Alignment.Center).offset(y = -centerShiftUp),
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(34.dp)
+                    horizontalArrangement = Arrangement.spacedBy(16.dp)
                 ) {
                     Column(
                         horizontalAlignment = Alignment.CenterHorizontally,
@@ -580,6 +595,20 @@ fun PlayerScreen(
                     ) {
                         Icon(NsIcons.SkipBack10, contentDescription = "Back 10 seconds", tint = Color.White, modifier = Modifier.size(27.dp))
                         Text("10", fontFamily = ManropeFamily, fontWeight = FontWeight.ExtraBold, fontSize = 10.5.sp, color = Color.White)
+                    }
+                    // v1.1.3 item 1: previous episode, next to
+                    // play/pause — moved here from the bottom row.
+                    IconButton(
+                        onClick = { session.previous() },
+                        enabled = index > 0,
+                        modifier = Modifier.size(48.dp)
+                    ) {
+                        Icon(
+                            NsIcons.Previous,
+                            contentDescription = "Previous episode",
+                            tint = if (index > 0) Color.White else Color.White.copy(alpha = 0.4f),
+                            modifier = Modifier.size(26.dp)
+                        )
                     }
                     Box(
                         modifier = Modifier
@@ -596,6 +625,20 @@ fun PlayerScreen(
                             modifier = Modifier.size(27.dp).then(
                                 if (!isPlaying) Modifier.padding(start = 3.dp) else Modifier
                             )
+                        )
+                    }
+                    // v1.1.3 item 1: next episode, next to play/pause
+                    // — moved here from the bottom row.
+                    IconButton(
+                        onClick = { session.next() },
+                        enabled = index < playlistSize - 1,
+                        modifier = Modifier.size(48.dp)
+                    ) {
+                        Icon(
+                            NsIcons.Next,
+                            contentDescription = "Next episode",
+                            tint = if (index < playlistSize - 1) Color.White else Color.White.copy(alpha = 0.4f),
+                            modifier = Modifier.size(26.dp)
                         )
                     }
                     Column(
@@ -699,31 +742,9 @@ fun PlayerScreen(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        IconButton(
-                            onClick = { session.previous() },
-                            enabled = index > 0,
-                            modifier = Modifier.size(44.dp)
-                        ) {
-                            Icon(
-                                NsIcons.Previous,
-                                contentDescription = "Previous episode",
-                                tint = if (index > 0) Color.White else Color.White.copy(alpha = 0.4f),
-                                modifier = Modifier.size(21.dp)
-                            )
-                        }
-                        // v1.1.2 item 4: Next episode button.
-                        IconButton(
-                            onClick = { session.next() },
-                            enabled = index < playlistSize - 1,
-                            modifier = Modifier.size(44.dp)
-                        ) {
-                            Icon(
-                                NsIcons.Next,
-                                contentDescription = "Next episode",
-                                tint = if (index < playlistSize - 1) Color.White else Color.White.copy(alpha = 0.4f),
-                                modifier = Modifier.size(21.dp)
-                            )
-                        }
+                        // v1.1.3 item 1: prev/next live in the centre
+                        // cluster now (next to play/pause), NOT here.
+                        // Bottom row = CC / quality / lock / fullscreen.
                         IconButton(
                             onClick = {
                                 if (tracks.isNotEmpty()) {
@@ -897,17 +918,19 @@ fun PlayerScreen(
                                 )
                             }
                         }
-                        // v1.1.2 item 2: BIG cards — a large 16/9
-                        // thumb with the name BELOW it, so the space
-                        // below the player is full, not empty. Real
-                        // data, deduped playlist order; tap plays
-                        // that episode. Fewer than 3 remaining =
-                        // fewer cards, never fake rows.
-                        Column(verticalArrangement = Arrangement.spacedBy(18.dp)) {
-                            upNext.forEachIndexed { offset, upItem ->
+                        // v1.1.3 item 2: Up Next is a HORIZONTAL rail
+                        // in the mini (portrait) player — swipe through
+                        // the next episodes like YouTube. Same big-card
+                        // look as v1.1.2 (16/9 thumb, name below), but
+                        // sized for the rail (250dp wide, so the next
+                        // card peeks in). Real data, deduped playlist
+                        // order; tap plays that episode. Fewer than 10
+                        // remaining = fewer cards, never fake rows.
+                        LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                            itemsIndexed(upNextRail) { offset, upItem ->
                                 Column(
                                     modifier = Modifier
-                                        .fillMaxWidth()
+                                        .width(250.dp)
                                         .clickable { session.playAt(index + 1 + offset) }
                                 ) {
                                     VideoThumb(
